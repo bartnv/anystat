@@ -1,0 +1,22 @@
+# this is a comment
+
+setting 1
+setting 2
+
+load-avg:
+  cat /proc/loadavg
+  valuex 1
+
+entropy:
+  cat /proc/sys/kernel/random/entropy_avail
+  valuex 1
+
+conn-estab:
+  cat /proc/net/snmp
+  line 8
+  valuex 10
+
+mail-policy:
+  tail /var/log/exim4/report
+  namex 3
+  interval 120
