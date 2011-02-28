@@ -11,7 +11,7 @@ typedef struct input_tail {
   FILE *fpnew;
   int watch;
   int size;
-  int reopen; // 1 = original file was moved; 2 = original file was unlinked from filesystem
+  int reopen; // 1 = original file was moved; 2 = original file was unlinked
 } input_tail;
 
 typedef struct input_pipe {

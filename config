@@ -1,8 +1,5 @@
 # this is a comment
 
-setting 1
-setting 2
-
 load-avg:
   cat /proc/loadavg
   valuex 1
@@ -16,7 +13,7 @@ conn-estab:
   line 8
   valuex 10
 
-mail-policy:
-  tail /var/log/exim4/report
+apache-access:
+  tail /var/log/apache2/access
   namex 3
-  interval 120
+  interval 300
