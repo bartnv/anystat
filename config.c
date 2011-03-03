@@ -2,6 +2,7 @@ void read_config(char *);
 void process_setting(input_t *, char *, char *);
 void start_watches(void);
 void start_pipes(void);
+void start_pipe(input_t *);
 void open_fifos(void);
 void open_sockets(void);
 void set(char **, char *);
@@ -74,37 +75,59 @@ void read_config(char *config) {
       fprintf(stderr, "Input %s has no type defined\n", newinput->name);
       exit(-1);
     }
+
+    if (newinput->regex && !(newinput->pcre = pcre_compile(newinput->regex, 0, (const char **)&errorp, &offset, NULL))) {
+      fprintf(stderr, "Compilation error at position %d in regex for input %s: %s\n", offset, input->name, errorp);
+      exit(-1);
+    }
     if (newinput->type & INPUT_CAT) {
       if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
       else if (newinput->valuex) {
-        if (!newinput->cat->line) newinput->cat->line = 1;
-        newinput->subtype = TYPE_VALPOS;
+        if (!newinput->line) newinput->subtype = TYPE_VALPOS;
+        else newinput->subtype = TYPE_LINEVALPOS;
       }
       else newinput->subtype = TYPE_COUNT;
       if (newinput->interval < MIN_INTERVAL) {
         if (newinput->interval) newinput->interval = MIN_INTERVAL;
         else newinput->interval = DEF_INTERVAL;
       }
-      printf("Input %s is type CAT subtype %d\n", newinput->name, newinput->subtype);
+      printf("Input %s is type CAT subtype %d (%d sec interval)\n", newinput->name, newinput->subtype, newinput->interval);
     }
     else if (newinput->type & INPUT_TAIL) {
       if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
       else if (newinput->valuex) newinput->subtype = TYPE_VALPOS;
       else if (newinput->namex) newinput->subtype = TYPE_NAMECOUNT;
       else newinput->subtype = TYPE_COUNT;
-      if (newinput->subtype & TYPE_COUNT|TYPE_NAMECOUNT) {
+      if (newinput->subtype & (TYPE_COUNT|TYPE_NAMECOUNT)) {
         if (newinput->interval < MIN_INTERVAL) {
           if (newinput->interval) newinput->interval = MIN_INTERVAL;
           else newinput->interval = DEF_INTERVAL;
         }
       }
-      printf("Input %s is type TAIL subtype %d\n", newinput->name, newinput->subtype);
+      printf("Input %s is type TAIL subtype %d (%d sec interval)\n", newinput->name, newinput->subtype, newinput->interval);
+    }
+    else if (newinput->type & INPUT_CMD) {
+      if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
+      else if (newinput->valuex) {
+        if (!newinput->line) newinput->subtype = TYPE_VALPOS;
+        else newinput->subtype = TYPE_LINEVALPOS;
+      }
+      else newinput->subtype = TYPE_COUNT;
+      if (newinput->interval < MIN_INTERVAL) {
+        if (newinput->interval) newinput->interval = MIN_INTERVAL;
+        else newinput->interval = DEF_INTERVAL;
+      }
+      printf("Input %s is type CMD subtype %d (%d sec interval)\n", newinput->name, newinput->subtype, newinput->interval);
     }
     else if (newinput->type & INPUT_PIPE) {
       if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
       else if (newinput->valuex) newinput->subtype = TYPE_VALPOS;
       else newinput->subtype = TYPE_COUNT;
-      printf("Input %s is type PIPE subtype %d\n", newinput->name, newinput->subtype);
+      if (newinput->interval < MIN_INTERVAL) {
+        if (newinput->interval) newinput->interval = MIN_INTERVAL;
+        else newinput->interval = DEF_INTERVAL;
+      }
+      printf("Input %s is type PIPE subtype %d (%d sec interval)\n", newinput->name, newinput->subtype, newinput->interval);
     }
   }
 }
@@ -149,6 +172,21 @@ void process_setting(input_t *input, char *name, char *value) {
     else fprintf(stderr, "TAIL requested but type already set for %s\n", input->name);
     return;
   }
+  else if (!strcasecmp("cmd", name) && value) {
+    if (!input->type) {
+      printf("Requested CMD of %s\n", value);
+      input->type = INPUT_CMD;
+      input->cmd = (input_cmd *)malloc(sizeof(input_cmd));
+      if (!input->cmd) {
+        fprintf(stderr, "Failed to allocate memory for input\n");
+        exit(-1);
+      }
+      memset(input->cmd, 0, sizeof(input_cmd));
+      set(&input->cmd->cmd, value);
+    }
+    else fprintf(stderr, "CMD requested but type already set for %s\n", input->name);
+    return;
+  }
   else if (!strcasecmp("pipe", name) && value) {
     if (!input->type) {
       printf("Requested PIPE of %s\n", value);
@@ -171,7 +209,6 @@ void process_setting(input_t *input, char *name, char *value) {
   }
 
   if (!strcasecmp("valuex", name) && value) {
-
     c = strtol(value, &cp, 10);
     if (cp != value) input->valuex = c;
     else fprintf(stderr, "Invalid parameter in VALUEX setting: %s\n", value);
@@ -184,16 +221,18 @@ void process_setting(input_t *input, char *name, char *value) {
     return;
   }
   else if (!strcasecmp("line", name) && value) {
-    if (!(input->type & INPUT_CAT)) fprintf(stderr, "LINE setting specified for incompatible input type\n");
+    if (!(input->type & (INPUT_CAT|INPUT_CMD))) fprintf(stderr, "LINE setting specified for incompatible input type\n");
+    else if ((input->type & INPUT_CAT) && input->cat->skip) fprintf(stderr, "LINE setting ignored; SKIP already specified\n");
     else {
       c = strtol(value, &cp, 10);
-      if (cp != value) input->cat->line = c;
+      if (cp != value) input->line = c;
       else fprintf(stderr, "Invalid parameter in LINE setting: %s\n", value);
     }
     return;
   }
   else if (!strcasecmp("skip", name) && value) {
-    if (!(input->type & INPUT_CAT)) fprintf(stderr, "SKIP setting specified for incompatible input type\n");
+    if (!(input->type & INPUT_CAT)) fprintf(stderr, "SKIP setting spefcified for incompatible input type\n");
+    else if (input->line) fprintf(stderr, "SKIP setting ignored; LINE already specified\n");
     else {
       c = strtol(value, &cp, 10);
       if (cp != value) input->cat->skip = c;
@@ -205,6 +244,10 @@ void process_setting(input_t *input, char *name, char *value) {
     c = strtol(value, &cp, 10);
     if (cp != value) input->interval = c;
     else fprintf(stderr, "Invalid parameter in INTERVAL setting: %s\n", value);
+    return;
+  }
+  else if (!strcasecmp("regex", name) && value) {
+    set(&input->regex, value);
     return;
   }
 
@@ -233,7 +276,7 @@ void start_tails(void) {
         perror("fcntl()");
         exit(-1);
       }
-      if (input->subtype & TYPE_COUNT|TYPE_NAMECOUNT) input->tail->watch = inotify_add_watch(inot, input->tail->filename, IN_DELETE_SELF|IN_MOVE_SELF);
+      if (input->subtype & (TYPE_COUNT|TYPE_NAMECOUNT)) input->tail->watch = inotify_add_watch(inot, input->tail->filename, IN_DELETE_SELF|IN_MOVE_SELF);
       else input->tail->watch = inotify_add_watch(inot, input->tail->filename, IN_MODIFY|IN_DELETE_SELF|IN_MOVE_SELF);
       if (input->tail->watch < 0) {
         perror("inotify_add_watch()");
@@ -245,33 +288,68 @@ void start_tails(void) {
 }
 
 void start_pipes(void) {
-  int c;
-  char *argv[4];
   input_t *input;
 
   for (input = inputs; input; input = input->next) {
-    if (input->type & INPUT_PIPE) {
-      if (pipe(input->pipe->fds)) exit(-2);
-      fcntl(input->pipe->fds[0], F_SETFL, O_NONBLOCK);
-      switch ((c = fork())) {
-        case -1: exit(-3);
-        case 0:  /* CHILD */
-          close(1);
-          dup(input->pipe->fds[1]);
-          close(2);
-          dup(input->pipe->fds[1]);
-          argv[0] = "/bin/sh";
-          argv[1] = "-c";
-          argv[2] = input->pipe->cmd;
-          argv[3] = NULL;
-          execve("/bin/sh", argv, NULL);
-          exit(-4);
-        default: /* PARENT */
-          input->pipe->pid = c;
-          printf("Pipe input %s launched succesfully with PID %d\n", input->name, input->pipe->pid);
-      }
-    }
+    if (input->type & INPUT_PIPE) start_pipe(input);
   }
+}
+
+void start_pipe(input_t *input) {
+  int c;
+  char *argv[4];
+
+  if (input->pipe->fds[0]) close(input->pipe->fds[0]);
+  if (pipe(input->pipe->fds)) {
+    perror("pipe()");
+    exit(-2);
+  }
+  fcntl(input->pipe->fds[0], F_SETFL, O_NONBLOCK);
+  switch ((c = fork())) {
+    case -1: exit(-3);
+    case 0:  /* CHILD */
+      close(input->pipe->fds[0]);
+      dup2(input->pipe->fds[1], STDOUT_FILENO);
+      argv[0] = "/bin/sh";
+      argv[1] = "-c";
+      argv[2] = input->pipe->cmd;
+      argv[3] = NULL;
+      execve("/bin/sh", argv, NULL);
+      exit(-4);
+    default: /* PARENT */
+      close(input->pipe->fds[1]);
+      input->pipe->pid = c;
+      printf("Pipe input %s launched succesfully with PID %d\n", input->name, input->pipe->pid);
+//      input->pipe->fp = fdopen(input->pipe->fds[0], "r");
+//      setlinebuf(input->pipe->fp);
+  }
+}
+
+void start_cmd(input_t *input) {
+  int c;
+  char *argv[4];
+
+  if (pipe(input->cmd->fds)) {
+    perror("pipe()");
+    exit(-2);
+  }
+  fcntl(input->cmd->fds[0], F_SETFL, O_NONBLOCK);
+  switch ((c = fork())) {
+    case -1: exit(-3);
+    case 0:  /* CHILD */
+      dup2(input->cmd->fds[1], STDOUT_FILENO);
+      argv[0] = "/bin/sh";
+      argv[1] = "-c";
+      argv[2] = input->cmd->cmd;
+      argv[3] = NULL;
+      execve("/bin/sh", argv, NULL);
+      exit(-4);
+    default: /* PARENT */
+      input->cmd->pid = c;
+//      printf("CMD input %s launched succesfully with PID %d\n", input->name, input->cmd->pid);
+  }
+  input->updlast = now-input->update;
+  input->update = now;
 }
 
 void open_fifos(void) { }

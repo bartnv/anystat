@@ -1,8 +1,15 @@
 # this is a comment
 
-load-avg:
-  cat /proc/loadavg
-  valuex 1
+#load-avg:
+#  cat /proc/loadavg
+#  valuex 1
+
+udp-conntrack:
+  cat /proc/net/udp
+
+tcp-conntrack:
+  cat /proc/net/tcp
+  skip 1
 
 entropy:
   cat /proc/sys/kernel/random/entropy_avail
@@ -17,3 +24,22 @@ apache-access:
   tail /var/log/apache2/access
   namex 3
   interval 300
+
+hddtemp:
+  cmd hddtemp -n /dev/sda
+  valuex 1
+
+tcp-estab:
+  cmd iptables -vnxL STATS-FLOOD
+  line 3
+  valuex 2
+
+interfaces-in:
+  cmd perl -e 'while (<>) { if (/^\s+([^:]+):\s*(\d+) /) { print "$1 $2\n"; } }' < /proc/net/dev
+  namex 1
+  valuex 2
+
+test:
+  pipe perl -e '$| = 1; while (1) { print rand() . "\n"; sleep 35; }'
+  valuex 1
+
