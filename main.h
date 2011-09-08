@@ -1,6 +1,5 @@
 typedef struct input_cat {
   char *filename;
-  int skip;
 } input_cat;
 
 typedef struct input_tail {
@@ -17,6 +16,7 @@ typedef struct input_cmd {
   char *cmd;
   int fds[2];
   int pid;
+  int running;
 } input_cmd;
 
 typedef struct input_pipe {
@@ -24,6 +24,7 @@ typedef struct input_pipe {
   short type;
   int fds[2]; // fds[0] = parent side (read), fds[1] = child side (write)
   int pid;
+  int offset;
 } input_pipe;
 
 typedef struct input_fifo {
@@ -40,6 +41,7 @@ typedef struct input_t {
   struct input_t *parent;
   short type;
   short subtype;
+  int skip;
   int line;
   int valuex;
   int namex;
@@ -47,6 +49,9 @@ typedef struct input_t {
   int interval;
   char *regex;
   pcre *pcre;
+  int delta;
+  int rate;
+  int consol;
   input_cat *cat;
   input_tail *tail;
   input_cmd *cmd;
@@ -63,7 +68,56 @@ typedef struct input_t {
   float rocsum;
   float amplast;
   float ampsum;
+  float deltalast;
+  unsigned int consolcnt;
+  float consolsum;
+  FILE *logfp;
 } input_t;
+
+struct {
+  char *logdir;
+  int logsize;
+} settings;
+
+char *type[] = {
+  "CAT",
+  "TAIL",
+  "CMD",
+  NULL,
+  "PIPE"
+};
+
+char *subtype[] = {
+  "COUNT",
+  "VALPOS",
+  "LINEVALPOS",
+  NULL,
+  "NAMECOUNT",
+  NULL,
+  NULL,
+  NULL,
+  "NAMEVALPOS"
+};
+
+char *consol[] = {
+  "FIRST",
+  "LAST",
+  "MIN",
+  NULL,
+  "MAX",
+  NULL,
+  NULL,
+  NULL,
+  "SUM",
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  "AVG"
+};
 
 input_t *inputs;
 
@@ -75,9 +129,13 @@ char mainbuf[MAIN_BUF_SIZE+1];
 
 void do_cat(input_t *);
 void do_tail(input_t *);
-void do_namepos(input_t *, char *);
+void do_tail_fp(input_t *, FILE *);
+void do_namepos(input_t *, char *, char *);
 void do_pipe(input_t *);
 void parse(input_t *, char *);
+void consolidate(input_t *, float);
 void process(input_t *, float);
+void report_consol(input_t *);
 void display(input_t *);
+void write_log(input_t *, float);
 char *gettok(char *, int, char);

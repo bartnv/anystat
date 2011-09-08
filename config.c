@@ -9,7 +9,7 @@ void set(char **, char *);
 
 void read_config(char *config) {
   char *errorp, *name, *setting;
-  int c, offset, matches[9];
+  int c, offset, matches[30];
   FILE *fp;
   pcre *rxname, *rxsetting;
   input_t *input, *newinput = NULL;
@@ -31,7 +31,7 @@ void read_config(char *config) {
   while (fgets(mainbuf, MAIN_BUF_SIZE, fp)) {
     if (mainbuf[0] == '#') continue;
     else {
-      if ((c = pcre_exec(rxname, NULL, mainbuf, strlen(mainbuf), 0, 0, matches, 9)) >= 0) {
+      if ((c = pcre_exec(rxname, NULL, mainbuf, strlen(mainbuf), 0, 0, matches, 30)) >= 0) {
         if (matches[3] > 0) {
           mainbuf[matches[3]] = '\0';
           newinput = (input_t *)malloc(sizeof(input_t));
@@ -54,13 +54,15 @@ void read_config(char *config) {
         fprintf(stderr, "pcre_exec returned error %d\n", c);
         continue;
       }
-      if ((c = pcre_exec(rxsetting, NULL, mainbuf, strlen(mainbuf), 0, 0, matches, 9)) >= 0) {
-        if ((matches[5] > 0) && (matches[4] != matches[5])) {
+      if ((c = pcre_exec(rxsetting, NULL, mainbuf, strlen(mainbuf), 0, 0, matches, 30)) >= 0) {
+//        if ((matches[5] > 0) && (matches[4] != matches[5])) {
+        if (c > 1) {
           mainbuf[matches[3]] = '\0';
-          mainbuf[matches[5]] = '\0';
-          process_setting(newinput, mainbuf+matches[2], mainbuf+matches[4]);
+          mainbuf[matches[c*2-1]] = '\0';
+          process_setting(newinput, mainbuf+matches[2], mainbuf+matches[c*2-2]);
         }
-        else if (matches[3] > 0) {
+//        else if (matches[3] > 0) {
+        else if (c == 1) {
           mainbuf[matches[3]] = '\0';
           process_setting(newinput, mainbuf+matches[2], NULL);
         }
@@ -80,6 +82,7 @@ void read_config(char *config) {
       fprintf(stderr, "Compilation error at position %d in regex for input %s: %s\n", offset, input->name, errorp);
       exit(-1);
     }
+
     if (newinput->type & INPUT_CAT) {
       if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
       else if (newinput->valuex) {
@@ -91,7 +94,11 @@ void read_config(char *config) {
         if (newinput->interval) newinput->interval = MIN_INTERVAL;
         else newinput->interval = DEF_INTERVAL;
       }
-      printf("Input %s is type CAT subtype %d (%d sec interval)\n", newinput->name, newinput->subtype, newinput->interval);
+      printf("Input %s is type CAT subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
+      if (newinput->delta) printf(" with mode DELTA");
+      if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
+      if (newinput->regex) printf(" with REGEX match \"%s\"\n", newinput->regex);
+      else printf("\n");
     }
     else if (newinput->type & INPUT_TAIL) {
       if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
@@ -104,7 +111,11 @@ void read_config(char *config) {
           else newinput->interval = DEF_INTERVAL;
         }
       }
-      printf("Input %s is type TAIL subtype %d (%d sec interval)\n", newinput->name, newinput->subtype, newinput->interval);
+      printf("Input %s is type TAIL subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
+      if (newinput->delta) printf(" with mode DELTA");
+      if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
+      if (newinput->regex) printf(" with REGEX match \"%s\"\n", newinput->regex);
+      else printf("\n");
     }
     else if (newinput->type & INPUT_CMD) {
       if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
@@ -117,7 +128,11 @@ void read_config(char *config) {
         if (newinput->interval) newinput->interval = MIN_INTERVAL;
         else newinput->interval = DEF_INTERVAL;
       }
-      printf("Input %s is type CMD subtype %d (%d sec interval)\n", newinput->name, newinput->subtype, newinput->interval);
+      printf("Input %s is type CMD subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
+      if (newinput->delta) printf(" with mode DELTA");
+      if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
+      if (newinput->regex) printf(" with REGEX match \"%s\"\n", newinput->regex);
+      else printf("\n");
     }
     else if (newinput->type & INPUT_PIPE) {
       if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
@@ -127,7 +142,22 @@ void read_config(char *config) {
         if (newinput->interval) newinput->interval = MIN_INTERVAL;
         else newinput->interval = DEF_INTERVAL;
       }
-      printf("Input %s is type PIPE subtype %d (%d sec interval)\n", newinput->name, newinput->subtype, newinput->interval);
+      printf("Input %s is type PIPE subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
+      if (newinput->delta) printf(" with mode DELTA");
+      if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
+      if (newinput->regex) printf(" with REGEX match \"%s\"\n", newinput->regex);
+      else printf("\n");
+    }
+
+    if (newinput->consol) {
+      if ((newinput->type & (INPUT_TAIL|INPUT_PIPE)) && !newinput->interval) {
+        fprintf(stderr, "Input %s type %s without specified interval cannot use consolidation function\n", newinput->name, type[input->type/2]);
+        exit(-1);
+      }
+      if (newinput->subtype & (TYPE_COUNT|TYPE_LINEVALPOS|TYPE_NAMECOUNT)) {
+        fprintf(stderr, "Input %s subtype %s cannot use consolidation function\n", newinput->name, subtype[newinput->subtype/2]);
+        exit(-1);
+      }
     }
   }
 }
@@ -137,8 +167,20 @@ void process_setting(input_t *input, char *name, char *value) {
   char *cp;
 
   if (!input) {
-    if (!value) printf("General setting: %s\n", name);
-    else printf("General setting: %s -> \"%s\"\n", name, value);
+    if (!strcasecmp("logdir", name) && value) {
+      set(&settings.logdir, value);
+      return;
+    }
+    else if (!strcasecmp("logsize", name) && value) {
+      c = strtol(value, &cp, 10);
+      if (cp != value) {
+        if (c <= 0) fprintf(stderr, "LOGSIZE setting cannot be zero or negative (remove LOGDIR setting to disable logging)\n", c);
+        else settings.logsize = c;
+      }
+      else fprintf(stderr, "Invalid parameter in LOGSIZE setting: %s\n", value);
+    }
+    if (!value) printf("General setting '%s' is not valid or needs a parameter\n", name);
+    else printf("General setting '%s' set to \"%s\" is not valid\n", name, value);
     return;
   }
 
@@ -210,19 +252,25 @@ void process_setting(input_t *input, char *name, char *value) {
 
   if (!strcasecmp("valuex", name) && value) {
     c = strtol(value, &cp, 10);
-    if (cp != value) input->valuex = c;
+    if (cp != value) {
+      if (input->namex && (input->namex == c)) fprintf(stderr, "NAMEX setting and VALUEX setting cannot both be %d\n", c);
+      else input->valuex = c;
+    }
     else fprintf(stderr, "Invalid parameter in VALUEX setting: %s\n", value);
     return;
   }
   else if (!strcasecmp("namex", name) && value) {
     c = strtol(value, &cp, 10);
-    if (cp != value) input->namex = c;
+    if (cp != value) {
+      if (input->valuex && (input->valuex == c)) fprintf(stderr, "NAMEX setting and VALUEX setting cannot both be %d\n", c);
+      else input->namex = c;
+    }
     else fprintf(stderr, "Invalid parameter in NAMEX setting: %s\n", value);
     return;
   }
   else if (!strcasecmp("line", name) && value) {
     if (!(input->type & (INPUT_CAT|INPUT_CMD))) fprintf(stderr, "LINE setting specified for incompatible input type\n");
-    else if ((input->type & INPUT_CAT) && input->cat->skip) fprintf(stderr, "LINE setting ignored; SKIP already specified\n");
+    else if (input->skip) fprintf(stderr, "LINE setting ignored; SKIP already specified\n");
     else {
       c = strtol(value, &cp, 10);
       if (cp != value) input->line = c;
@@ -231,11 +279,11 @@ void process_setting(input_t *input, char *name, char *value) {
     return;
   }
   else if (!strcasecmp("skip", name) && value) {
-    if (!(input->type & INPUT_CAT)) fprintf(stderr, "SKIP setting spefcified for incompatible input type\n");
+    if (!(input->type & (INPUT_CAT|INPUT_CMD))) fprintf(stderr, "SKIP setting specified for incompatible input type\n");
     else if (input->line) fprintf(stderr, "SKIP setting ignored; LINE already specified\n");
     else {
       c = strtol(value, &cp, 10);
-      if (cp != value) input->cat->skip = c;
+      if (cp != value) input->skip = c;
       else fprintf(stderr, "Invalid parameter in SKIP setting: %s\n", value);
     }
     return;
@@ -248,6 +296,30 @@ void process_setting(input_t *input, char *name, char *value) {
   }
   else if (!strcasecmp("regex", name) && value) {
     set(&input->regex, value);
+    return;
+  }
+  else if (!strcasecmp("delta", name)) {
+    input->delta = 1;
+    return;
+  }
+  else if (!strcasecmp("rate", name) && value) {
+    if (!strcasecmp("persec", value)) input->rate = 1;
+    else if (!strcasecmp("permin", value)) input->rate = 60;
+    else {
+      c = strtol(value, &cp, 10);
+      if ((cp != value) && ((int)c > 0)) input->rate = c;
+      else fprintf(stderr, "Invalid parameter in RATE setting for input %s: %s\n", input->name, value);
+    }
+    return;
+  }
+  else if (!strcasecmp("consol", name) && value) {
+    if (!strcasecmp("first", value)) input->consol = CONSOL_FIRST;
+    else if (!strcasecmp("last", value)) input->consol = CONSOL_LAST;
+    else if (!strcasecmp("min", value)) input->consol = CONSOL_MIN;
+    else if (!strcasecmp("max", value)) input->consol = CONSOL_MAX;
+    else if (!strcasecmp("sum", value)) input->consol = CONSOL_SUM;
+    else if (!strcasecmp("avg", value)) input->consol = CONSOL_AVG;
+    else fprintf(stderr, "Invalid parameter in CONSOL setting for input %s: %s\n", input->name, value);
     return;
   }
 
@@ -299,16 +371,18 @@ void start_pipe(input_t *input) {
   int c;
   char *argv[4];
 
-  if (input->pipe->fds[0]) close(input->pipe->fds[0]);
-  if (pipe(input->pipe->fds)) {
-    perror("pipe()");
+  if (input->pipe->fds[0]) {
+    if (close(input->pipe->fds[0])) perror("close()");
+  }
+  if (pipe(input->pipe->fds)) {  // the main process stdin must never be closed, otherwise the first of these pipe file descriptors
+    perror("pipe()");            //  may be "0", causing the if (input->pipe->fds[0]) test elsewhere to fail unexpectedly
     exit(-2);
   }
   fcntl(input->pipe->fds[0], F_SETFL, O_NONBLOCK);
   switch ((c = fork())) {
     case -1: exit(-3);
     case 0:  /* CHILD */
-      close(input->pipe->fds[0]);
+      if (close(input->pipe->fds[0])) perror("close()");
       dup2(input->pipe->fds[1], STDOUT_FILENO);
       argv[0] = "/bin/sh";
       argv[1] = "-c";
@@ -317,7 +391,7 @@ void start_pipe(input_t *input) {
       execve("/bin/sh", argv, NULL);
       exit(-4);
     default: /* PARENT */
-      close(input->pipe->fds[1]);
+      if (close(input->pipe->fds[1])) perror("close()");
       input->pipe->pid = c;
       printf("Pipe input %s launched succesfully with PID %d\n", input->name, input->pipe->pid);
 //      input->pipe->fp = fdopen(input->pipe->fds[0], "r");
@@ -329,6 +403,9 @@ void start_cmd(input_t *input) {
   int c;
   char *argv[4];
 
+  if (input->cmd->fds[0]) {
+    if (close(input->cmd->fds[0])) perror("close()");
+  }
   if (pipe(input->cmd->fds)) {
     perror("pipe()");
     exit(-2);
@@ -337,6 +414,7 @@ void start_cmd(input_t *input) {
   switch ((c = fork())) {
     case -1: exit(-3);
     case 0:  /* CHILD */
+      if (close(input->cmd->fds[0])) perror("close()");
       dup2(input->cmd->fds[1], STDOUT_FILENO);
       argv[0] = "/bin/sh";
       argv[1] = "-c";
@@ -345,11 +423,10 @@ void start_cmd(input_t *input) {
       execve("/bin/sh", argv, NULL);
       exit(-4);
     default: /* PARENT */
+      if (close(input->cmd->fds[1])) perror("close()");
       input->cmd->pid = c;
 //      printf("CMD input %s launched succesfully with PID %d\n", input->name, input->cmd->pid);
   }
-  input->updlast = now-input->update;
-  input->update = now;
 }
 
 void open_fifos(void) { }

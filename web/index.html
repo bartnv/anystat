@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>TB statistics</title>
+<script src="RGraph.common.core.js" type="text/javascript"></script>
+<script src="RGraph.scatter.js" type="text/javascript"></script>
+<script src="json-minified.js" type="text/javascript"></script>
+<script><!--
+  var activeDiv;
+  var activeTab;
+  var graphWidth = 960;
+  var graphData = new Array();
+
+  function $(id) {
+    return document.getElementById(id);
+  }
+
+function dump(arr,level) {
+	var dumped_text = "";
+	if(!level) level = 0;
+	
+	//The padding given at the beginning of the line.
+	var level_padding = "";
+	for(var j=0;j<level+1;j++) level_padding += "    ";
+	
+	if(typeof(arr) == 'object') { //Array/Hashes/Objects 
+		for(var item in arr) {
+			var value = arr[item];
+			
+			if(typeof(value) == 'object') { //If it is an array,
+				dumped_text += level_padding + "'" + item + "' ...\n";
+				dumped_text += dump(value,level+1);
+			} else {
+				dumped_text += level_padding + "'" + item + "' => \"" + value + "\"\n";
+			}
+		}
+	} else { //Stings/Chars/Numbers etc.
+		dumped_text = "===>"+arr+"<===("+typeof(arr)+")";
+	}
+	return dumped_text;
+}
+
+  function smooth(src, spp, mode) {
+    var res = new Array();
+
+    if (mode == 'average') {
+      for (var i = 0; src[i]; i++) {
+        var arr = new Array();
+        var div = 0;
+        var sum = 0;
+        var cnt = 0;
+        for (var j = 0; src[i][j]; j++) {
+          if (Math.floor(src[i][j][0]/spp) > div) {
+            dp = new Array();
+            dp[0] = (div+0.5)*spp;
+            dp[1] = sum/cnt;
+            arr.push(dp);
+            div = Math.floor(src[i][j][0]/spp);
+            sum = 0;
+            cnt = 0;
+          }
+          sum += src[i][j][1];
+          cnt++;
+        }
+        res.push(arr);
+      }
+    }
+    else if (mode == 'minmax') {
+      for (var i = 0; src[i]; i++) {
+        var arr = new Array();
+        var div = 0;
+        var min = Infinity;
+        var max = -Infinity;
+        for (var j = 0; src[i][j]; j++) {
+          if (Math.floor(src[i][j][0]/spp) > div) {
+            var dp = new Array();
+            dp[0] = (div+0.5)*spp;
+            dp[1] = min;
+            arr.push(dp.slice(0));
+            dp[0] += 1;
+            dp[1] = max;
+            arr.push(dp);
+            div = Math.floor(src[i][j][0]/spp);
+            min = Infinity;
+            max = -Infinity;
+          }
+          if (src[i][j][1] < min) min = src[i][j][1];
+          if (src[i][j][1] > max) max = src[i][j][1];
+        }
+        res.push(arr);
+      }
+    }
+    return res;
+  }
+
+  function myFormatter(obj, num) {
+    if (num > 9999999) return (num/1000000) + 'M';
+    if (num > 9999) return (num/1000) + 'k';
+    return num;
+  }
+
+  function drawGraph(name, data, keys, start, span) {
+    if (span/3600 < 8) unit = 1;
+    else if (span/7200 < 8) unit = 2;
+    else if (span/14400 < 8) unit = 4;
+    else if (span/21600 < 8) unit = 6;
+    else if (span/43200 < 8) unit = 12;
+    else if (span/86400 < 8) unit = 24;
+    else unit = 168;
+    var d = new Date();
+    d.setMinutes(0);
+    d.setSeconds(0);
+    d.setMilliseconds(0);
+    if (d.getHours()%unit) d.setHours(d.getHours()-d.getHours()%unit);
+    if (unit >= 168) { // Align the label sequence to always display the most recent first-of-the-month
+      if (d.getDate()%(unit/24) > 1) d.setDate(d.getDate()-d.getDate()%(unit/24)+1);
+      else d.setDate(d.getDate()-6);
+    }
+    var labels = new Array();
+    var label;
+    do {
+      label = new Array();
+      if ((unit >= 168) || (d.getHours() == 0)) label[0] = d.toLocaleString().split(" ", 3).join(" ");
+      else label[0] = (d.getHours() < 10)?'0'+d.getHours()+':00':d.getHours()+':00';
+      label[1] = Math.round(d.getTime()/1000)-start;
+      labels.push(label);
+      d.setTime(d.getTime()-unit*3600000);
+      if ((unit >= 24) && (d.getHours() != 0)) { // Correct for DST shifts, *mumble* *mumble*
+        if (d.getHours() == 23) d.setTime(d.getTime()+3600000);
+        else d.setTime(d.getTime()-3600000);
+      }
+    } while (d.getTime()/1000 > start);
+
+    if (data[0].length > graphWidth-75) data = smooth(data, span/(graphWidth-75), 'average');
+    var config = {
+      'chart.gutter.left':     50,
+      'chart.gutter.bottom':   50,
+      'chart.key':             keys,
+      'chart.key.position':    'gutter',
+      'chart.key.position.x':  50,
+      'chart.key.position.y':  280,
+      'chart.key.shadow':      true,
+      'chart.labels':          labels,
+      'chart.line':            true,
+      'chart.line.colors':     ['#000000', '#ff0000', '#00ff00', '#0000ff', '#00ffff', '#ff00ff', '#ff7f00', '#7f00ff', '#007fff', 'ff007f'],
+      'chart.line.stepped':    true,
+      'chart.scale.formatter': myFormatter,
+      'chart.tickmarks':       null,
+      'chart.title.vpos':      0.7,
+      'chart.xmax':            span,
+      'chart.xticks':          false
+    }
+    if ($(name + '-' + span/3600)) {
+      RGraph.Clear($(name + '-' + span/3600));
+      var sg = new RGraph.Scatter(name + '-' + span/3600, data);
+      if (span <= 86400) sg.Set('chart.title', name + ' - Last ' + span/3600 + ' hours');
+      else sg.Set('chart.title', name + ' - Last ' + span/86400 + ' days');
+      RGraph.SetConfig(sg, config);
+      sg.Draw();
+    }
+    if (span == 86400) {
+      RGraph.Clear($(name));
+      var sg = new RGraph.Scatter(name, data);
+      sg.Set('chart.title', name + ' - Last 24 hours');
+      RGraph.SetConfig(sg, config);
+      sg.Draw();
+    }
+  }
+
+  function parseData() {
+    if (this.readyState == 4 && this.status == 200) {
+      var response = jsonParse(this.responseText);
+      var unit;
+      var start = Number(response["start"]);
+      var end = Number(response["end"]);
+      var span = end-start;
+      graphData[response["name"]] = response["data"].slice(0);
+      drawGraph(response["name"], graphData[response["name"]], response["keys"], start, span);
+    }
+  }
+
+  function getData(input, span) {
+    var d = new Date();
+    var end = Math.round(d.getTime()/1000);
+    var start = end-span;
+    var xhr = new XMLHttpRequest();
+    xhr.onreadystatechange = parseData;
+    xhr.open('GET', 'data.php?source=' + input + '&start=' + start + '&end=' + end + '&res=' + (graphWidth-75), true);
+    xhr.send();
+  }
+  function hideDetail() {
+    if (activeDiv.id != 'div-overview') {
+      activeDiv.style.display = 'none';
+      activeDiv = $('div-overview');
+      activeDiv.style.display = 'block';
+      activeTab.className = 'tab';
+      activeTab = $('tab-overview');
+      activeTab.className = 'tab active';
+    }
+  }
+  function showDetail() {
+    input = this.id.replace('tab-', '');
+    if ((detail = $('div-' + input))) {
+      activeDiv.style.display = 'none';
+      activeDiv = detail;
+      activeDiv.style.display = 'block';
+      activeTab.className = 'tab';
+      activeTab = $('tab-' + input);
+      activeTab.className = 'tab active';
+    }
+    else {
+      body = $('body');
+      activeDiv.style.display = 'none';
+      activeDiv = document.createElement('div');
+      activeDiv.id = 'div-' + this.id;
+      activeDiv.className = 'pane';
+      body.appendChild(activeDiv);
+      spans = new Array(14400, 86400, 604800, 2592000);
+      for (i in spans) {
+        var canvas = document.createElement('canvas');
+        canvas.id = this.id + '-' + spans[i]/3600;
+        canvas.width = graphWidth;
+        canvas.height = 300;
+        canvas.onclick = hideDetail;
+        if (spans[i] <= 172800) writeCanvas(canvas, "Loading " + this.id + " " + spans[i]/3600 + " hrs");
+        else writeCanvas(canvas, "Loading " + this.id + " " + spans[i]/86400 + " days");
+        activeDiv.appendChild(canvas);
+        getData(this.id, spans[i]);
+      }
+      tabs = $('tabs');
+      tab = document.createElement('span');
+      tab.id = 'tab-' + this.id;
+      tab.className = 'tab active';
+      tab.innerHTML = this.id + '<img class="close" src="close.jpg" onclick="closeDetail(\'' + this.id + '\');" />';
+      tab.onclick = showDetail;
+      tabs.appendChild(tab);
+      activeTab.className = 'tab';
+      activeTab = tab;
+    }
+    scroll(0,0);
+  }
+  function closeDetail(name) {
+    detail = $('div-' + name);
+    tab = $('tab-' + name);
+    detail.parentNode.removeChild(detail);
+    tab.parentNode.removeChild(tab);
+    if (activeDiv.id == 'div-' + name) {
+      activeDiv = $('div-overview');
+      activeDiv.style.display = 'block';
+      activeTab = $('tab-overview');
+      activeTab.className = 'tab active';
+    }
+    window.event.stopPropagation();
+  }
+  function writeCanvas(canvas, text) {
+    ct = canvas.getContext("2d");
+    ct.font = "12px sans-serif";
+    ct.fillText(text, 50, 50);
+  }
+  function parseInputs() {
+    if ((this.readyState == 4) && (this.status == 200)) {
+      var inputs = jsonParse(this.responseText);
+      var overview = $('div-overview');
+      var keys = [];
+      for (key in inputs) keys.push(key);
+      keys.sort();
+      for (i = 0; key = keys[i]; i++) {
+        var canvas = document.createElement('canvas');
+        canvas.id = key;
+        canvas.width = 960;
+        canvas.height = 300;
+        canvas.onclick = showDetail;
+        writeCanvas(canvas, "Loading " + key + "...");
+        overview.appendChild(canvas);
+        getData(key, 86400);
+      }
+    }
+  }
+  function initialise() {
+    activeTab = $('tab-overview');
+    activeDiv = $('div-overview');
+    var httpRequest = new XMLHttpRequest();
+    httpRequest.onreadystatechange = parseInputs;
+    httpRequest.open('GET', 'data.php');
+    httpRequest.send();
+  }
+-->
+</script>
+<style type="text/css">
+DIV#tabs { border-bottom: solid black 1px; padding-top: 15px; padding-bottom: 9px; }
+DIV.pane { }
+SPAN.tab { border: solid black 1px; border-bottom: none; padding: 10px; margin-left: 10px; }
+SPAN.active { background-color: cyan; }
+IMG.close { vertical-align: top; }
+</style>
+</head>
+<body id="body" onload="initialise();">
+<div id="tabs"><span id="tab-overview" class="tab active" onclick="hideDetail();">Overview</span></div>
+<div id="div-overview" class="pane"></div>
+<!--<textarea id="log"></textarea>-->
+</body>
+</html>
