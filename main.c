@@ -809,7 +809,7 @@ void process(input_t *input, float fl) {
     }
   }
   if (input->rate) {
-    if (input->update) fl = fl/(now-input->update)*input->rate;
+    if (input->update) fl = fl/((now-input->update)*input->rate);
     else {
       input->update = now;
       return;
