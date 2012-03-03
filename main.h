@@ -50,6 +50,8 @@ typedef struct input_t {
   char *regex;
   pcre *pcre;
   int delta;
+  int time;
+  struct timeval tv;
   int rate;
   int consol;
   input_cat *cat;
@@ -96,7 +98,15 @@ char *subtype[] = {
   NULL,
   NULL,
   NULL,
-  "NAMEVALPOS"
+  "NAMEVALPOS",
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  "TIME"
 };
 
 char *consol[] = {

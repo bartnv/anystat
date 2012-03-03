@@ -37,6 +37,8 @@
 #define TYPE_LINEVALPOS          4	// Read value from word x on line y
 #define TYPE_NAMECOUNT           8	// Count output lines grouped by name
 #define TYPE_NAMEVALPOS         16	// Read value from word x on each line; group by name read from word y
+#define TYPE_TIME		32	// For periodical inputs: record the time taken to complete the operation
+					// For continuous inputs: record the time between output lines
 
 #define CONSOL_FIRST		 1
 #define CONSOL_LAST		 2
@@ -325,7 +327,14 @@ int main(int argc, char *argv[]) {
             close(input->cmd->fds[0]);
             input->cmd->fds[0] = 0;
             input->update = now;
-            if (input->consol) {
+
+            if (input->time) {
+              struct timeval tv;
+              gettimeofday(&tv, NULL);
+              process(input, (float)tv.tv_sec - (float)input->tv.tv_sec + ((float)tv.tv_usec - (float)input->tv.tv_usec)/1000000);
+              memset(&input->tv, 0, sizeof(struct timeval));
+            }
+            else if (input->consol) {
               while (input->next && input->next->parent) {
                 input = input->next;
                 report_consol(input);
@@ -929,9 +938,11 @@ char *gettok(char *str, int n, char delim) {
   char *start;
   static char *tok = NULL;
 
+  if (tok) free(tok);
+  tok = NULL;
+
   if (!str || !*str || (n <= 0) || !delim) return NULL;
 
-  if (tok) free(tok);
   while (1) {
     if ((*str == '\n') || (*str == '\0')) return NULL;
     if (*str != delim) {

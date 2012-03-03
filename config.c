@@ -84,7 +84,8 @@ void read_config(char *config) {
     }
 
     if (newinput->type & INPUT_CAT) {
-      if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
+      if (newinput->time) newinput->subtype = TYPE_TIME;
+      else if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
       else if (newinput->valuex) {
         if (!newinput->line) newinput->subtype = TYPE_VALPOS;
         else newinput->subtype = TYPE_LINEVALPOS;
@@ -95,13 +96,17 @@ void read_config(char *config) {
         else newinput->interval = DEF_INTERVAL;
       }
       printf("Input %s is type CAT subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
-      if (newinput->delta) printf(" with mode DELTA");
-      if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
-      if (newinput->regex) printf(" with REGEX match \"%s\"\n", newinput->regex);
-      else printf("\n");
+      if (newinput->time) printf(" with mode TIME");
+      else {
+        if (newinput->delta) printf(" with mode DELTA");
+        if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
+      }
+      if (newinput->regex) printf(" with REGEX match \"%s\"", newinput->regex);
+      printf("\n");
     }
     else if (newinput->type & INPUT_TAIL) {
-      if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
+      if (newinput->time) newinput->subtype = TYPE_TIME;
+      else if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
       else if (newinput->valuex) newinput->subtype = TYPE_VALPOS;
       else if (newinput->namex) newinput->subtype = TYPE_NAMECOUNT;
       else newinput->subtype = TYPE_COUNT;
@@ -112,13 +117,17 @@ void read_config(char *config) {
         }
       }
       printf("Input %s is type TAIL subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
-      if (newinput->delta) printf(" with mode DELTA");
-      if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
-      if (newinput->regex) printf(" with REGEX match \"%s\"\n", newinput->regex);
-      else printf("\n");
+      if (newinput->time) printf(" with mode TIME");
+      else {
+        if (newinput->delta) printf(" with mode DELTA");
+        if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
+      }
+      if (newinput->regex) printf(" with REGEX match \"%s\"", newinput->regex);
+      printf("\n");
     }
     else if (newinput->type & INPUT_CMD) {
-      if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
+      if (newinput->time) newinput->subtype = TYPE_TIME;
+      else if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
       else if (newinput->valuex) {
         if (!newinput->line) newinput->subtype = TYPE_VALPOS;
         else newinput->subtype = TYPE_LINEVALPOS;
@@ -129,13 +138,17 @@ void read_config(char *config) {
         else newinput->interval = DEF_INTERVAL;
       }
       printf("Input %s is type CMD subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
-      if (newinput->delta) printf(" with mode DELTA");
-      if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
-      if (newinput->regex) printf(" with REGEX match \"%s\"\n", newinput->regex);
-      else printf("\n");
+      if (newinput->time) printf(" with mode TIME");
+      else {
+        if (newinput->delta) printf(" with mode DELTA");
+        if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
+      }
+      if (newinput->regex) printf(" with REGEX match \"%s\"", newinput->regex);
+      printf("\n");
     }
     else if (newinput->type & INPUT_PIPE) {
-      if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
+      if (newinput->time) newinput->subtype = TYPE_TIME;
+      else if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
       else if (newinput->valuex) newinput->subtype = TYPE_VALPOS;
       else newinput->subtype = TYPE_COUNT;
       if (newinput->interval < MIN_INTERVAL) {
@@ -143,12 +156,16 @@ void read_config(char *config) {
         else newinput->interval = DEF_INTERVAL;
       }
       printf("Input %s is type PIPE subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
-      if (newinput->delta) printf(" with mode DELTA");
-      if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
-      if (newinput->regex) printf(" with REGEX match \"%s\"\n", newinput->regex);
-      else printf("\n");
+      if (newinput->time) printf(" with mode TIME");
+      else {
+        if (newinput->delta) printf(" with mode DELTA");
+        if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
+      }
+      if (newinput->regex) printf(" with REGEX match \"%s\"", newinput->regex);
+      printf("\n");
     }
 
+    // Check for incompatible mode specifications
     if (newinput->consol) {
       if ((newinput->type & (INPUT_TAIL|INPUT_PIPE)) && !newinput->interval) {
         fprintf(stderr, "Input %s type %s without specified interval cannot use consolidation function\n", newinput->name, type[input->type/2]);
@@ -158,6 +175,13 @@ void read_config(char *config) {
         fprintf(stderr, "Input %s subtype %s cannot use consolidation function\n", newinput->name, subtype[newinput->subtype/2]);
         exit(-1);
       }
+    }
+    if (newinput->time) {
+      if (newinput->line) fprintf(stderr, "Input %s: mode TIME overrides LINE option\n", newinput->name);
+      if (newinput->valuex) fprintf(stderr, "Input %s: mode TIME overrides VALUEX option\n", newinput->name);
+      if (newinput->namex) fprintf(stderr, "Input %s: mode TIME overrides NAMEX option\n", newinput->name);
+      if (newinput->delta) fprintf(stderr, "Input %s: mode TIME overrides mode DELTA\n", newinput->name);
+      if (newinput->consol) fprintf(stderr, "Input %s: mode TIME overrides consolidation function\n", newinput->name);
     }
   }
 }
@@ -178,6 +202,7 @@ void process_setting(input_t *input, char *name, char *value) {
         else settings.logsize = c;
       }
       else fprintf(stderr, "Invalid parameter in LOGSIZE setting: %s\n", value);
+      return;
     }
     if (!value) printf("General setting '%s' is not valid or needs a parameter\n", name);
     else printf("General setting '%s' set to \"%s\" is not valid\n", name, value);
@@ -322,6 +347,10 @@ void process_setting(input_t *input, char *name, char *value) {
     else fprintf(stderr, "Invalid parameter in CONSOL setting for input %s: %s\n", input->name, value);
     return;
   }
+  else if (!strcasecmp("time", name)) {
+    input->time = 1;
+    return;
+  }
 
   if (!value) fprintf(stderr, "Unrecognised setting for %s: %s\n", input->name, name);
   else fprintf(stderr, "Unrecognised setting for %s: %s %s\n", input->name, name, value);
@@ -423,6 +452,7 @@ void start_cmd(input_t *input) {
       execve("/bin/sh", argv, NULL);
       exit(-4);
     default: /* PARENT */
+      if (input->time) gettimeofday(&input->tv, NULL);
       if (close(input->cmd->fds[1])) perror("close()");
       input->cmd->pid = c;
 //      printf("CMD input %s launched succesfully with PID %d\n", input->name, input->cmd->pid);
