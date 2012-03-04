@@ -1,3 +1,5 @@
+#define _GNU_SOURCE // Needed for versionsort()... makes this code unportable beyond Linux
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -14,6 +16,7 @@
 #include <pcre.h>
 #include <wait.h> // waitpid()
 #include <signal.h>
+#include <dirent.h> // scandir(), versionsort()
 
 #define CONFIG_FILE "/etc/anystat.conf"
 
@@ -901,8 +904,10 @@ void display(input_t *input) {
 }
 
 void write_log(input_t *input, float fl) {
-  char *filename;
+  int r, n;
+  char *filename = NULL;
   struct stat statbuf;
+  struct dirent **namelist;
 
   if (settings.logsize && input->logfp) {
     if (fstat(fileno(input->logfp), &statbuf)) {
@@ -916,19 +921,63 @@ void write_log(input_t *input, float fl) {
   }
 
   if (!input->logfp) {
+    if ((r = scandir(".", &namelist, NULL, versionsort)) == -1) {
+      fprintf(stderr, "Failed to read log directory %s\n", getcwd(mainbuf, MAIN_BUF_SIZE));
+      return;
+    }
     if (input->parent) {
-      filename = (char *)malloc(strlen(input->name)+strlen(input->parent->name)+17);
-      sprintf(filename, "%s.%s.%d.log", input->parent->name, input->name, now);
+      filename = (char *)malloc(strlen(input->name)+strlen(input->parent->name)+3);
+      sprintf(filename, "%s.%s.", input->parent->name, input->name);
     }
     else {
-      filename = (char *)malloc(strlen(input->name)+16);
-      sprintf(filename, "%s.%d.log", input->name, now);
+      filename = (char *)malloc(strlen(input->name)+2);
+      sprintf(filename, "%s.", input->name);
     }
+    for (n = r-1; n; n--) {
+      if (!strncmp(filename, namelist[n]->d_name, strlen(filename))) {
+        free(filename);
+        filename = namelist[n]->d_name;
+        break;
+      }
+    }
+    if (!n) { // Loop ended without finding valid file
+      free(filename);
+      filename = NULL;
+    }
+    else {
+      printf("Found %s as latest logfile for %s\n", filename, input->name);
+      if (stat(filename, &statbuf)) {
+        fprintf(stderr, "Failed to stat() logfile %s for %s: %s (skipping write)\n", filename, input->name, strerror(errno));
+        while (--r) free(namelist[r]);
+        free(namelist);
+        return;
+      }
+      if (statbuf.st_size >= settings.logsize) {
+        free(filename);
+        filename = NULL;
+      }
+    }
+    while (--r) free(namelist[r]);
+    free(namelist);
+
+    if (!filename) { // No previous logfile found or the latest was already too large
+      if (input->parent) {
+        filename = (char *)malloc(strlen(input->name)+strlen(input->parent->name)+17);
+        sprintf(filename, "%s.%s.%d.log", input->parent->name, input->name, now);
+      }
+      else {
+        filename = (char *)malloc(strlen(input->name)+16);
+        sprintf(filename, "%s.%d.log", input->name, now);
+      }
+      printf("Creating logfile %s for input %s\n", filename, input->name);
+    }
+
     if (!(input->logfp = fopen(filename, "a"))) {
       fprintf(stderr, "Failed to open logfile \"%s\": %s\n", filename, strerror(errno));
       return;
     }
   }
+
   fprintf(input->logfp, "%d,%f\n", now, fl);
   fflush(input->logfp);
 }
