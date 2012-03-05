@@ -73,6 +73,7 @@ typedef struct input_t {
   float deltalast;
   unsigned int consolcnt;
   float consolsum;
+  char *buffer;
   FILE *logfp;
 } input_t;
 
@@ -142,7 +143,8 @@ void do_tail(input_t *);
 void do_tail_fp(input_t *, FILE *);
 void do_namepos(input_t *, char *, char *);
 void do_pipe(input_t *);
-void parse(input_t *, char *);
+int parse_line(input_t *, char *);
+void parse_value(input_t *, char *);
 void consolidate(input_t *, float);
 void process(input_t *, float);
 void report_consol(input_t *);
