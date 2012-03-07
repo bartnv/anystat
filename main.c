@@ -245,7 +245,7 @@ int main(int argc, char *argv[]) {
             }
             offset = strlen(start);
           }
-          if ((c == 0) || done) { // Process closed pipe or we are done with it
+          if ((c == 0) || done) { // Either the process closed the pipe or we are done with it
             close(input->cmd->fds[0]);
             input->cmd->fds[0] = 0;
             input->update = now;
