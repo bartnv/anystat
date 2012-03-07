@@ -96,8 +96,7 @@ void read_config(char *config) {
         else newinput->interval = DEF_INTERVAL;
       }
       printf("Input %s is type CAT subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
-      if (newinput->time) printf(" with mode TIME");
-      else {
+      if (!newinput->time) {
         if (newinput->delta) printf(" with mode DELTA");
         if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
       }
@@ -117,8 +116,7 @@ void read_config(char *config) {
         }
       }
       printf("Input %s is type TAIL subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
-      if (newinput->time) printf(" with mode TIME");
-      else {
+      if (!newinput->time) {
         if (newinput->delta) printf(" with mode DELTA");
         if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
       }
@@ -138,8 +136,7 @@ void read_config(char *config) {
         else newinput->interval = DEF_INTERVAL;
       }
       printf("Input %s is type CMD subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
-      if (newinput->time) printf(" with mode TIME");
-      else {
+      if (!newinput->time) {
         if (newinput->delta) printf(" with mode DELTA");
         if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
       }
@@ -156,8 +153,7 @@ void read_config(char *config) {
         else newinput->interval = DEF_INTERVAL;
       }
       printf("Input %s is type PIPE subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
-      if (newinput->time) printf(" with mode TIME");
-      else {
+      if (!newinput->time) {
         if (newinput->delta) printf(" with mode DELTA");
         if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
       }

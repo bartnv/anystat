@@ -257,7 +257,7 @@ int main(int argc, char *argv[]) {
             else if (input->time) {
               struct timeval tv;
               gettimeofday(&tv, NULL);
-              process(input, (float)tv.tv_sec - (float)input->tv.tv_sec + ((float)tv.tv_usec - (float)input->tv.tv_usec)/1000000);
+              process(input, tv.tv_sec - input->tv.tv_sec + (tv.tv_usec - input->tv.tv_usec)/1000000.0);
               memset(&input->tv, 0, sizeof(struct timeval));
             }
             else if (input->consol) {
