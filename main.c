@@ -878,7 +878,8 @@ void write_log(input_t *input, float fl) {
     for (n = r-1; n; n--) {
       if (!strncmp(filename, namelist[n]->d_name, strlen(filename))) {
         free(filename);
-        filename = namelist[n]->d_name;
+        filename = (char *)malloc(strlen(namelist[n]->d_name)+1);
+        strcpy(filename, namelist[n]->d_name);
         break;
       }
     }
@@ -914,12 +915,11 @@ void write_log(input_t *input, float fl) {
       printf("Creating logfile %s for input %s\n", filename, input->name);
     }
 
-    if (!*filename) printf("Input %s produced an empty filename\n", input->name); // Temp
-
     if (!(input->logfp = fopen(filename, "a"))) {
       fprintf(stderr, "Failed to open logfile \"%s\": %s\n", filename, strerror(errno));
       return;
     }
+    free(filename);
   }
 
   fprintf(input->logfp, "%d,%f\n", now, fl);
