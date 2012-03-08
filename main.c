@@ -665,7 +665,7 @@ int parse_line(input_t *input, char *line) {
     else {
       tok = gettok(line, input->valuex, ' ');
       if (!tok) {
-        fprintf(stderr, "Not enough words on line %d in input %s file %s\n", input->count, input->name, input->cat->filename);
+        fprintf(stderr, "Not enough words on line %d in input %s\n", input->count, input->name);
         return 0;
       }
     }
