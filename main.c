@@ -252,10 +252,7 @@ int main(int argc, char *argv[]) {
 
             if (offset) parse_line(input, start);
 
-            if (input->subtype & TYPE_COUNT) {
-              process(input, input->count);
-              input->count = 0;
-            }
+            if (input->subtype & TYPE_COUNT) process(input, input->count);
             else if (input->time) {
               struct timeval tv;
               gettimeofday(&tv, NULL);
@@ -268,6 +265,7 @@ int main(int argc, char *argv[]) {
                 report_consol(input);
               }
             }
+            input->count = 0;
           }
           else {
             if (errno == EAGAIN) { // Nothing left to read currently
@@ -915,6 +913,8 @@ void write_log(input_t *input, float fl) {
       }
       printf("Creating logfile %s for input %s\n", filename, input->name);
     }
+
+    if (!*filename) printf("Input %s produced an empty filename\n"); // Temp
 
     if (!(input->logfp = fopen(filename, "a"))) {
       fprintf(stderr, "Failed to open logfile \"%s\": %s\n", filename, strerror(errno));
