@@ -914,7 +914,7 @@ void write_log(input_t *input, float fl) {
       printf("Creating logfile %s for input %s\n", filename, input->name);
     }
 
-    if (!*filename) printf("Input %s produced an empty filename\n"); // Temp
+    if (!*filename) printf("Input %s produced an empty filename\n", input->name); // Temp
 
     if (!(input->logfp = fopen(filename, "a"))) {
       fprintf(stderr, "Failed to open logfile \"%s\": %s\n", filename, strerror(errno));
