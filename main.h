@@ -75,11 +75,13 @@ typedef struct input_t {
   float consolsum;
   char *buffer;
   FILE *logfp;
+  WINDOW *win;
 } input_t;
 
 struct {
   char *logdir;
   int logsize;
+  int monitor;
 } settings;
 
 char *type[] = {
@@ -151,3 +153,4 @@ void report_consol(input_t *);
 void display(input_t *);
 void write_log(input_t *, float);
 char *gettok(char *, int, char);
+void do_exit(int);

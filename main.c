@@ -17,6 +17,7 @@
 #include <wait.h> // waitpid()
 #include <signal.h>
 #include <dirent.h> // scandir(), versionsort()
+#include <ncurses.h> // ncurses functions in ncurses.c and WINDOW declaration in main.h
 
 #define CONFIG_FILE "/etc/anystat.conf"
 
@@ -51,6 +52,7 @@
 #define CONSOL_AVG		32
 
 #include "main.h"
+#include "ncurses.c"
 #include "config.c"
 
 int main(int argc, char *argv[]) {
@@ -64,6 +66,8 @@ int main(int argc, char *argv[]) {
   memset(&settings, 0, sizeof(settings));
 
   signal(SIGCHLD, SIG_IGN);
+  signal(SIGINT, do_exit);
+  signal(SIGTERM, do_exit);
 
   setlinebuf(stdout);
 
@@ -79,7 +83,13 @@ int main(int argc, char *argv[]) {
 
   now = time(NULL);
 
-  if (argc > 1) read_config(argv[1]);
+  if (argc > 1) {
+    if (!strcmp(argv[1], "-m")) {
+      settings.monitor = 1;
+      if (argc > 2) read_config(argv[2]);
+    }
+    else read_config(argv[1]);
+  }
   else read_config(NULL);
   if (settings.logdir && chdir(settings.logdir)) {
     fprintf(stderr, "Failed to change to log directory '%s': %s (logging disabled)\n", settings.logdir, strerror(errno));
@@ -91,6 +101,11 @@ int main(int argc, char *argv[]) {
   open_sockets();
 
   fflush(stdout);
+
+  if (settings.monitor) {
+    printf("Monitoring mode selected; starting ncurses...\n");
+    go_ncurses();
+  }
 
   while (1) {
     maxsleep = 60;
@@ -148,7 +163,7 @@ int main(int argc, char *argv[]) {
 
     maxfd = STDIN_FILENO;
     FD_ZERO(&readfds);
-    FD_SET(STDIN_FILENO, &readfds);
+//    FD_SET(STDIN_FILENO, &readfds);
     FD_SET(inot, &readfds);
     if (inot > maxfd) maxfd = inot;
     for (input = inputs; input; input = input->next) {
@@ -162,7 +177,7 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    printf("Sleeping up to %d seconds\n", maxsleep);
+//    printf("Sleeping up to %d seconds\n", maxsleep);
 
     tv.tv_sec = maxsleep;
     tv.tv_usec = 0;
@@ -612,7 +627,11 @@ void do_namepos(input_t *input, char *name, char *value) {
     if (input->delta) newchild->delta = input->delta;
     if (input->consol) newchild->consol = input->consol;
     if (input->rate) newchild->rate = input->rate;
-    printf("Input %s: created new child %s\n", input->name, child->next->name);
+    if (settings.monitor) {
+      create_block(newchild);
+      arrange_blocks();
+    }
+    else printf("Input %s: created new child %s\n", input->name, child->next->name);
   }
   if (value) parse_value(child->next, value);  // subtype is TYPE_NAMEVALPOS
   else child->next->count++;  // subtype is TYPE_NAMECOUNT
@@ -784,7 +803,8 @@ void process(input_t *input, float fl) {
   input->update = now;
   input->vallast = fl;
 
-  display(input);
+  if (settings.monitor) update_block(input);
+  else display(input);
   if (settings.logdir) write_log(input, fl);
 }
 
@@ -954,4 +974,10 @@ char *gettok(char *str, int n, char delim) {
   strncpy(tok, start, str-start);
   tok[str-start] = '\0';
   return tok;
+}
+
+void do_exit(int sig) {
+  if (settings.monitor) exit_ncurses();
+  printf("Received signal %d, exiting...\n", sig);
+  exit(0);
 }
