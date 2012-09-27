@@ -1,4 +1,5 @@
 #define _GNU_SOURCE // Needed for versionsort()... makes this code unportable beyond Linux
+//#define _X_OPEN_SOURCE_EXTENDED // Needed for wide-character use of ncurses
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -9,19 +10,24 @@
 #include <errno.h>
 #include <time.h>
 #include <math.h>
+#include <float.h> // FLT_MIN and FLT_MAX defines
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/inotify.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <sys/time.h>
 #include <pcre.h>
 #include <wait.h> // waitpid()
 #include <signal.h>
 #include <dirent.h> // scandir(), versionsort()
-#include <ncurses.h> // ncurses functions in ncurses.c and WINDOW declaration in main.h
+#include <ncursesw/curses.h> // ncurses functions in ncurses.c and WINDOW declaration in main.h
+#include <locale.h> // setlocale()
 
 #define CONFIG_FILE "/etc/anystat.conf"
 
 #define MAIN_BUF_SIZE 4096
+#define VALUE_HIST_SIZE 30
 
 #define CONFIG_REGEX_NAME "^\\s*([a-zA-Z0-9_-]+)\\s*:\\s*$"
 #define CONFIG_REGEX_SETTING "^\\s*([a-zA-Z]+)\\s+(?:\"(.*?)\"|'(.*?)'|(.*?))\\s*$"
@@ -66,10 +72,12 @@ int main(int argc, char *argv[]) {
   memset(&settings, 0, sizeof(settings));
 
   signal(SIGCHLD, SIG_IGN);
+  signal(SIGWINCH, sig_winch);
   signal(SIGINT, do_exit);
   signal(SIGTERM, do_exit);
 
   setlinebuf(stdout);
+  setlocale(LC_ALL, "en_US.UTF-8");
 
   inot = inotify_init();
   if (inot == -1) {
@@ -101,6 +109,8 @@ int main(int argc, char *argv[]) {
   open_sockets();
 
   fflush(stdout);
+
+  ioctl(0, TIOCGWINSZ, &settings.ws);
 
   if (settings.monitor) {
     printf("Monitoring mode selected; starting ncurses...\n");
@@ -188,8 +198,17 @@ int main(int argc, char *argv[]) {
 
     if (c == -1) {
       if (errno == EINTR) {
-        printf("select() interrupted\n");
-        sleep(1);
+        if (settings.winch) {
+          ioctl(0, TIOCGWINSZ, &settings.ws);
+          refresh();
+          resizeterm(settings.ws.ws_row, settings.ws.ws_col);
+          if (settings.monitor) arrange_blocks();
+          settings.winch = 0;
+        }
+        else {
+          printf("select() interrupted\n");
+          sleep(1);
+        }
         continue;
       }
       exit(-5);
@@ -203,7 +222,7 @@ int main(int argc, char *argv[]) {
                 if (stat(input->tail->filename, &statbuf) != -1) {
                   if (statbuf.st_size == 0) {
                     rewind(input->tail->fp);
-                    printf("Input file for %s has been truncated\n", input->name);
+                    if (!settings.monitor) printf("Input file for %s has been truncated\n", input->name);
                   }
                   else if (statbuf.st_size > input->tail->size) {
                     do_tail(input);
@@ -225,11 +244,11 @@ int main(int argc, char *argv[]) {
               }
               if (ievent.mask & IN_MOVE_SELF) {
                 input->tail->reopen = 1;
-                printf("Input file for %s has been moved\n", input->name);
+                if (!settings.monitor) printf("Input file for %s has been moved\n", input->name);
               }
               if (ievent.mask & IN_DELETE_SELF) {
                 input->tail->reopen = 2;
-                printf("Input file for %s has been deleted\n", input->name);
+                if (!settings.monitor) printf("Input file for %s has been deleted\n", input->name);
               }
               break;
             }
@@ -460,7 +479,7 @@ void do_tail(input_t *input) {
     if ((r = stat(input->tail->filename, &statbuf)) != -1) {
       if (statbuf.st_size == 0) {
         rewind(input->tail->fp);
-        printf("Input file for %s has been truncated\n", input->name);
+        if (!settings.monitor) printf("Input file for %s has been truncated\n", input->name);
       }
       else if (statbuf.st_size < input->tail->size) {
         rewind(input->tail->fp);
@@ -475,7 +494,7 @@ void do_tail(input_t *input) {
 
   if (input->tail->reopen) {
     if (!input->tail->fpnew) {
-      printf("Trying to open new input file after move/delete\n");
+      if (!settings.monitor) printf("Trying to open new input file after move/delete\n");
       if (!(input->tail->fpnew = fopen(input->tail->filename, "r"))) {
         input->tail->fpnew = 0;
         perror("Failed to open new input file after move/delete");
@@ -498,7 +517,7 @@ void do_tail(input_t *input) {
     }
     else {
       if (!input->count) {
-        printf("No lines were added to old input file in one cycle, closing...\n");
+        if (!settings.monitor) printf("No lines were added to old input file in one cycle, closing...\n");
         fclose(input->tail->fp);
         input->tail->fp = input->tail->fpnew;
         input->tail->fpnew = 0;
@@ -624,6 +643,7 @@ void do_namepos(input_t *input, char *name, char *value) {
     newchild->next = child->next;
     child->next = newchild;
     newchild->parent = input;
+    newchild->vallast = newchild->valhist+VALUE_HIST_SIZE-1;
     if (input->delta) newchild->delta = input->delta;
     if (input->consol) newchild->consol = input->consol;
     if (input->rate) newchild->rate = input->rate;
@@ -794,14 +814,16 @@ void process(input_t *input, float fl) {
   if (input->valcnt > 1) {
     input->updlast = now-input->update;
     input->updsum += input->updlast;
-    input->roclast = fabsf(fl-input->vallast)/input->updlast;
+    input->roclast = fabsf(fl-*input->vallast)/input->updlast;
     input->rocsum += input->roclast;
     input->amplast = fabsf(fl-input->valsum/input->valcnt);
     input->ampsum += input->amplast;
   }
 
   input->update = now;
-  input->vallast = fl;
+  if (input->vallast-input->valhist == VALUE_HIST_SIZE-1) input->vallast = input->valhist;
+  else input->vallast++;
+  *input->vallast = fl;
 
   if (settings.monitor) update_block(input);
   else display(input);
@@ -822,46 +844,46 @@ void display(input_t *input) {
   if (input->parent) {
     if (input->valcnt > 2) {
       if (input->rocsum/(input->valcnt-1) < 0.1/60) printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/h <%.3g/h> | Cycle: %.3gs <%.3gs>\n",
-        input->parent->name, input->name, input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
+        input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
         input->roclast*3600, input->rocsum/(input->valcnt-1)*3600, input->updlast, input->updsum/(input->valcnt-1));
       else if (input->rocsum/(input->valcnt-1) < 0.1) printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/m <%.3g/m> | Cycle: %.3gs <%.3gs>\n",
-        input->parent->name, input->name, input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
+        input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
         input->roclast*60, input->rocsum/(input->valcnt-1)*60, input->updlast, input->updsum/(input->valcnt-1));
       else printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/s <%.3g/s> | Cycle: %.3gs <%.3gs>\n",
-        input->parent->name, input->name, input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
+        input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
         input->roclast, input->rocsum/(input->valcnt-1), input->updlast, input->updsum/(input->valcnt-1));
     }
     else if (input->valcnt > 1) {
       if (input->roclast < 0.1/60) printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/h | Cycle: %.3gs\n",
-        input->parent->name, input->name, input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*3600, input->updlast);
+        input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*3600, input->updlast);
       else if (input->roclast < 0.1) printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/m | Cycle: %.3gs\n",
-        input->parent->name, input->name, input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*60, input->updlast);
+        input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*60, input->updlast);
       else printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/s | Cycle: %.3gs\n",
-        input->parent->name, input->name, input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast, input->updlast);
+        input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast, input->updlast);
     }
-    else printf("[%s/%s] %.3g\n", input->parent->name, input->name, input->vallast);
+    else printf("[%s/%s] %.3g\n", input->parent->name, input->name, *input->vallast);
   }
   else {
       if (input->valcnt > 2) {
       if (input->rocsum/(input->valcnt-1) < 0.1/60) printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/h <%.3g/h> | Cycle: %.3gs <%.3gs>\n",
-        input->name, input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
+        input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
         input->roclast*3600, input->rocsum/(input->valcnt-1)*3600, input->updlast, input->updsum/(input->valcnt-1));
       else if (input->rocsum/(input->valcnt-1) < 0.1) printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/m <%.3g/m> | Cycle: %.3gs <%.3gs>\n",
-        input->name, input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
+        input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
         input->roclast*60, input->rocsum/(input->valcnt-1)*60, input->updlast, input->updsum/(input->valcnt-1));
       else printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/s <%.3g/s> | Cycle: %.3gs <%.3gs>\n",
-        input->name, input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
+        input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
         input->roclast, input->rocsum/(input->valcnt-1), input->updlast, input->updsum/(input->valcnt-1));
     }
     else if (input->valcnt > 1) {
       if (input->roclast < 0.1/60) printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/h | Cycle: %.3gs\n",
-        input->name, input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*3600, input->updlast);
+        input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*3600, input->updlast);
       else if (input->roclast < 0.1) printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/m | Cycle: %.3gs\n",
-        input->name, input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*60, input->updlast);
+        input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*60, input->updlast);
       else printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/s | Cycle: %.3gs\n",
-        input->name, input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast, input->updlast);
+        input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast, input->updlast);
     }
-    else printf("[%s] %.3g\n", input->name, input->vallast);
+    else printf("[%s] %.3g\n", input->name, *input->vallast);
   }
 }
 
@@ -908,7 +930,7 @@ void write_log(input_t *input, float fl) {
       filename = NULL;
     }
     else {
-      printf("Reusing logfile %s for input %s\n", filename, input->name);
+      if (!settings.monitor) printf("Reusing logfile %s for input %s\n", filename, input->name);
       if (stat(filename, &statbuf)) {
         fprintf(stderr, "Failed to stat() logfile %s for %s: %s (skipping write)\n", filename, input->name, strerror(errno));
         while (--r) free(namelist[r]);
@@ -932,7 +954,7 @@ void write_log(input_t *input, float fl) {
         filename = (char *)malloc(strlen(input->name)+16);
         sprintf(filename, "%s.%d.log", input->name, now);
       }
-      printf("Creating logfile %s for input %s\n", filename, input->name);
+      if (!settings.monitor) printf("Creating logfile %s for input %s\n", filename, input->name);
     }
 
     if (!(input->logfp = fopen(filename, "a"))) {
@@ -974,6 +996,10 @@ char *gettok(char *str, int n, char delim) {
   strncpy(tok, start, str-start);
   tok[str-start] = '\0';
   return tok;
+}
+
+void sig_winch(int sig) {
+  settings.winch = 1;
 }
 
 void do_exit(int sig) {

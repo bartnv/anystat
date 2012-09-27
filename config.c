@@ -46,6 +46,7 @@ void read_config(char *config) {
             input->next = newinput;
           }
           else inputs = newinput;
+          newinput->vallast = newinput->valhist+VALUE_HIST_SIZE-1;
           printf("New input: %s\n", mainbuf+matches[2]);
         }
         else fprintf(stderr, "Config regex name succeeded but no submatch returned\n");

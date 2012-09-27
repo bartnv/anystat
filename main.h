@@ -48,6 +48,7 @@ typedef struct input_t {
   int count;
   int interval;
   char *regex;
+  int output_format;
   pcre *pcre;
   int delta;
   int time;
@@ -62,7 +63,8 @@ typedef struct input_t {
   input_sock *sock;
   time_t update;
   unsigned int valcnt;
-  float vallast;
+  float valhist[VALUE_HIST_SIZE];
+  float *vallast;
   float valsum;
   float updlast;
   float updsum;
@@ -82,6 +84,8 @@ struct {
   char *logdir;
   int logsize;
   int monitor;
+  int winch;
+  struct winsize ws;
 } settings;
 
 char *type[] = {
@@ -153,4 +157,5 @@ void report_consol(input_t *);
 void display(input_t *);
 void write_log(input_t *, float);
 char *gettok(char *, int, char);
+void sig_winch(int);
 void do_exit(int);
