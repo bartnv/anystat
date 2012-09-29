@@ -27,7 +27,7 @@
 #define CONFIG_FILE "/etc/anystat.conf"
 
 #define MAIN_BUF_SIZE 4096
-#define VALUE_HIST_SIZE 30
+#define VALUE_HIST_SIZE 100
 
 #define CONFIG_REGEX_NAME "^\\s*([a-zA-Z0-9_-]+)\\s*:\\s*$"
 #define CONFIG_REGEX_SETTING "^\\s*([a-zA-Z]+)\\s+(?:\"(.*?)\"|'(.*?)'|(.*?))\\s*$"
