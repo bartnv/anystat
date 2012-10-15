@@ -49,6 +49,13 @@ typedef struct input_t {
   int interval;
   char *regex;
   int output_format;
+  char *unit;
+  float *scale_min;
+  float *scale_max;
+  float *warn_above;
+  float *warn_below;
+  float *crit_above;
+  float *crit_below;
   pcre *pcre;
   int delta;
   int time;

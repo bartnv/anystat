@@ -348,6 +348,64 @@ void process_setting(input_t *input, char *name, char *value) {
     input->time = 1;
     return;
   }
+  else if (!strcasecmp("unit", name) && value) {
+    input->unit = (char *)malloc(strlen(value)+1);
+    strcpy(input->unit, value);
+  }
+  else if (!strcasecmp("scale-min", name) && value) {
+    c = strtol(value, &cp, 10);
+    if (cp != value) {
+      input->scale_min = (float *)malloc(sizeof(float));
+      *input->scale_min = c;
+    }
+    else fprintf(stderr, "Invalid parameter in SCALE-MIN setting: %s\n", value);
+    return;
+  }
+  else if (!strcasecmp("scale-max", name) && value) {
+    c = strtol(value, &cp, 10);
+    if (cp != value) {
+      input->scale_max = (float *)malloc(sizeof(float));
+      *input->scale_max = c;
+    }
+    else fprintf(stderr, "Invalid parameter in SCALE-MAX setting: %s\n", value);
+    return;
+  }
+  else if (!strcasecmp("warn-above", name) && value) {
+    c = strtol(value, &cp, 10);
+    if (cp != value) {
+      input->warn_above = (float *)malloc(sizeof(float));
+      *input->warn_above = c;
+    }
+    else fprintf(stderr, "Invalid parameter in WARN-ABOVE setting: %s\n", value);
+    return;
+  }
+  else if (!strcasecmp("warn-below", name) && value) {
+    c = strtol(value, &cp, 10);
+    if (cp != value) {
+      input->warn_below = (float *)malloc(sizeof(float));
+      *input->warn_below = c;
+    }
+    else fprintf(stderr, "Invalid parameter in WARN-BELOW setting: %s\n", value);
+    return;
+  }
+  else if (!strcasecmp("crit-above", name) && value) {
+    c = strtol(value, &cp, 10);
+    if (cp != value) {
+      input->crit_above = (float *)malloc(sizeof(float));
+      *input->crit_above = c;
+    }
+    else fprintf(stderr, "Invalid parameter in CRIT-ABOVE setting: %s\n", value);
+    return;
+  }
+  else if (!strcasecmp("crit-below", name) && value) {
+    c = strtol(value, &cp, 10);
+    if (cp != value) {
+      input->crit_below = (float *)malloc(sizeof(float));
+      *input->crit_below = c;
+    }
+    else fprintf(stderr, "Invalid parameter in CRIT-BELOW setting: %s\n", value);
+    return;
+  }
 
   if (!value) fprintf(stderr, "Unrecognised setting for %s: %s\n", input->name, name);
   else fprintf(stderr, "Unrecognised setting for %s: %s %s\n", input->name, name, value);

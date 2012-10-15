@@ -10,6 +10,15 @@ void go_ncurses(void) {
 
   initscr();
   curs_set(0);
+  if (has_colors() == FALSE) {
+    endwin();
+    printf("Your terminal does not support color\n");
+    exit(1);
+  }
+  start_color();
+  init_pair(1, COLOR_WHITE, COLOR_BLACK);
+  init_pair(2, COLOR_YELLOW, COLOR_BLACK);
+  init_pair(3, COLOR_RED, COLOR_BLACK);
 
   for (input = inputs; input; input = input->next) {
     if (!(input->subtype & TYPE_NAMEVALPOS)) create_block(input);
@@ -49,19 +58,46 @@ void arrange_blocks(void) {
 }
 
 void update_block(input_t *input) {
-  if (input->valcnt == 1) mvwaddstr(input->win, 1, 7, format_float(input, *input->vallast));
-  else if (input->valcnt == 2) {
+  if (input->valcnt == 1) {
+    if (input->crit_above && (*input->vallast > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+    else if (input->warn_above && (*input->vallast > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+    else if (input->crit_below && (*input->vallast < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+    else if (input->warn_below && (*input->vallast < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
     mvwaddstr(input->win, 1, 7, format_float(input, *input->vallast));
+    wattron(input->win, COLOR_PAIR(1));
+  }
+  else if (input->valcnt == 2) {
+    if (input->crit_above && (*input->vallast > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+    else if (input->warn_above && (*input->vallast > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+    else if (input->crit_below && (*input->vallast < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+    else if (input->warn_below && (*input->vallast < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
+    mvwaddstr(input->win, 1, 7, format_float(input, *input->vallast));
+    wattron(input->win, COLOR_PAIR(1));
     waddstr(input->win, " <");
+    if (input->crit_above && (input->valsum/input->valcnt > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+    else if (input->warn_above && (input->valsum/input->valcnt > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+    else if (input->crit_below && (input->valsum/input->valcnt < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+    else if (input->warn_below && (input->valsum/input->valcnt < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
     waddstr(input->win, format_float(input, input->valsum/input->valcnt));
+    wattron(input->win, COLOR_PAIR(1));
     waddch(input->win,  '>');
     mvwaddstr(input->win, 2, 7, format_float(input, input->amplast));
     mvwaddstr(input->win, 3, 7, format_float(input, input->roclast));
   }
   else {
+    if (input->crit_above && (*input->vallast > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+    else if (input->warn_above && (*input->vallast > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+    else if (input->crit_below && (*input->vallast < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+    else if (input->warn_below && (*input->vallast < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
     mvwaddstr(input->win, 1, 7, format_float(input, *input->vallast));
+    wattron(input->win, COLOR_PAIR(1));
     waddstr(input->win, " <");
+    if (input->crit_above && (input->valsum/input->valcnt > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+    else if (input->warn_above && (input->valsum/input->valcnt > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+    else if (input->crit_below && (input->valsum/input->valcnt < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+    else if (input->warn_below && (input->valsum/input->valcnt < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
     waddstr(input->win, format_float(input, input->valsum/input->valcnt));
+    wattron(input->win, COLOR_PAIR(1));
     waddch(input->win, '>');
     mvwaddstr(input->win, 2, 7, format_float(input, input->amplast));
     waddstr(input->win, " <");
@@ -90,30 +126,43 @@ void update_plot(input_t *input) {
     else p--;
   }
 
-/*
-  if ((input->valcnt < VALUE_HIST_SIZE) || (input->vallast == input->valhist+VALUE_HIST_SIZE-1)) p = input->valhist;
-  else p = input->vallast+1;
-
-  do {
-
-    if (p == input->valhist+VALUE_HIST_SIZE-1) p = input->valhist;
-    else p++;
-  } while (p != input->vallast+1);
-  */
-  if (min == max) {
-    min -= 1;
-    max += 1;
+  if (max-min < 0.001) {
+    if (min >= 0 && (min < 0.001)) max = 2;
+    else {
+      min -= 1;
+      max += 1;
+    }
   }
+  if (input->scale_min) min = *input->scale_min;
+  if (input->scale_max) max = *input->scale_max;
 
-
+  if (input->crit_above && (max > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_above && (max > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+  else if (input->crit_below && (max < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_below && (max < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
   mvwaddstr(input->win, 4, 2, format_float(input, max));
+  if (input->crit_above && (min+(max-min)/2 > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_above && (min+(max-min)/2 > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+  else if (input->crit_below && (min+(max-min)/2 < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_below && (min+(max-min)/2 < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
+  else wattron(input->win, COLOR_PAIR(1));
   mvwaddstr(input->win, 7, 2, format_float(input, min+(max-min)/2));
+  if (input->crit_above && (min > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_above && (min > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+  else if (input->crit_below && (min < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_below && (min < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
   mvwaddstr(input->win, 10, 2, format_float(input, min));
+  wattron(input->win, COLOR_PAIR(1));
 
   for (row = 0; row < 7; row++) mvwaddstr(input->win, row+4, 7, "                     ");
   p = input->vallast;
   for (col = 20; col >= 0 && input->valcnt-(20-col) > 0; col--) {
+    if (input->crit_above && (*input->vallast > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+    else if (input->warn_above && (*p > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+    else if (input->crit_below && (*p < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+    else if (input->warn_below && (*p < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
     draw_column(input, col, min, (int)((*p-min)/(max-min)*12+0.5));
+    wattron(input->win, COLOR_PAIR(1));
     if (p == input->valhist) p = input->valhist+VALUE_HIST_SIZE-1;
     else p--;
   }

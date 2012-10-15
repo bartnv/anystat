@@ -30,7 +30,7 @@
 #define VALUE_HIST_SIZE 100
 
 #define CONFIG_REGEX_NAME "^\\s*([a-zA-Z0-9_-]+)\\s*:\\s*$"
-#define CONFIG_REGEX_SETTING "^\\s*([a-zA-Z]+)\\s+(?:\"(.*?)\"|'(.*?)'|(.*?))\\s*$"
+#define CONFIG_REGEX_SETTING "^\\s*([a-zA-Z-]+)\\s+(?:\"(.*?)\"|'(.*?)'|(.*?))\\s*$"
 
 #define MIN_INTERVAL 10
 #define DEF_INTERVAL 60
@@ -647,6 +647,34 @@ void do_namepos(input_t *input, char *name, char *value) {
     if (input->delta) newchild->delta = input->delta;
     if (input->consol) newchild->consol = input->consol;
     if (input->rate) newchild->rate = input->rate;
+    if (input->scale_min) {
+      newchild->scale_min = (float *)malloc(sizeof(float));
+      *newchild->scale_min = *input->scale_min;
+    }
+    if (input->scale_max) {
+      newchild->scale_max = (float *)malloc(sizeof(float));
+      *newchild->scale_max = *input->scale_max;
+    }
+    if (input->scale_max) {
+      newchild->scale_max = (float *)malloc(sizeof(float));
+      *newchild->scale_max = *input->scale_max;
+    }
+    if (input->warn_above) {
+      newchild->warn_above = (float *)malloc(sizeof(float));
+      *newchild->warn_above = *input->warn_above;
+    }
+    if (input->warn_below) {
+      newchild->warn_below = (float *)malloc(sizeof(float));
+      *newchild->warn_below = *input->warn_below;
+    }
+    if (input->crit_above) {
+      newchild->crit_above = (float *)malloc(sizeof(float));
+      *newchild->crit_above = *input->crit_above;
+    }
+    if (input->crit_below) {
+      newchild->crit_below = (float *)malloc(sizeof(float));
+      *newchild->crit_below = *input->crit_below;
+    }
     if (settings.monitor) {
       create_block(newchild);
       arrange_blocks();
@@ -862,6 +890,7 @@ void display(input_t *input) {
         input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast, input->updlast);
     }
     else printf("[%s/%s] %.3g\n", input->parent->name, input->name, *input->vallast);
+    if (input->warn_above && (*input->vallast > *input->warn_above)) printf("[%s/%s] Warning: value above threshold of %f\n", input->parent->name, input->name, *input->warn_above);
   }
   else {
       if (input->valcnt > 2) {
@@ -884,6 +913,7 @@ void display(input_t *input) {
         input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast, input->updlast);
     }
     else printf("[%s] %.3g\n", input->name, *input->vallast);
+    if (input->warn_above && (*input->vallast > *input->warn_above)) printf("[%s] Warning: value above threshold of %f\n", input->name, *input->warn_above);
   }
 }
 
