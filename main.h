@@ -32,7 +32,8 @@ typedef struct input_fifo {
 } input_fifo;
 
 typedef struct input_sock {
-  int port;
+  in_port_t port;
+  in_addr_t addr;
 } input_sock;
 
 typedef struct input_t {
@@ -73,6 +74,8 @@ typedef struct input_t {
   float valhist[VALUE_HIST_SIZE];
   float *vallast;
   float valsum;
+  float valmin;
+  float valmax;
   float updlast;
   float updsum;
   float roclast;
@@ -83,9 +86,18 @@ typedef struct input_t {
   unsigned int consolcnt;
   float consolsum;
   char *buffer;
+  int sqlid;
   FILE *logfp;
   WINDOW *win;
 } input_t;
+
+typedef struct {
+  float count;
+  float min;
+  float max;
+  float sum;
+  float deltasum;
+} result;
 
 struct {
   char *logdir;
@@ -93,6 +105,9 @@ struct {
   int monitor;
   int winch;
   struct winsize ws;
+  char *sqlite;
+  int summaries[SUMMARIES_MAX];
+  int nsummaries;
 } settings;
 
 char *type[] = {
@@ -100,7 +115,13 @@ char *type[] = {
   "TAIL",
   "CMD",
   NULL,
-  "PIPE"
+  "PIPE",
+  NULL, NULL, NULL,
+  "FIFO",
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  "LISTEN",
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  "CONNECT"
 };
 
 char *subtype[] = {
@@ -109,18 +130,12 @@ char *subtype[] = {
   "LINEVALPOS",
   NULL,
   "NAMECOUNT",
-  NULL,
-  NULL,
-  NULL,
+  NULL, NULL, NULL,
   "NAMEVALPOS",
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  "TIME"
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  "TIME",
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  "AGGREGATE"
 };
 
 char *consol[] = {
@@ -129,17 +144,9 @@ char *consol[] = {
   "MIN",
   NULL,
   "MAX",
-  NULL,
-  NULL,
-  NULL,
+  NULL, NULL, NULL,
   "SUM",
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL,
   "AVG"
 };
 
@@ -148,6 +155,8 @@ input_t *inputs;
 time_t now;
 
 int inot;
+
+sqlite3 *db;
 
 char mainbuf[MAIN_BUF_SIZE+1];
 
@@ -164,5 +173,7 @@ void report_consol(input_t *);
 void display(input_t *);
 void write_log(input_t *, float);
 char *gettok(char *, int, char);
+char *itodur(int);
+char *itoa(int);
 void sig_winch(int);
 void do_exit(int);

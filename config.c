@@ -56,13 +56,11 @@ void read_config(char *config) {
         continue;
       }
       if ((c = pcre_exec(rxsetting, NULL, mainbuf, strlen(mainbuf), 0, 0, matches, 30)) >= 0) {
-//        if ((matches[5] > 0) && (matches[4] != matches[5])) {
         if (c > 1) {
           mainbuf[matches[3]] = '\0';
           mainbuf[matches[c*2-1]] = '\0';
           process_setting(newinput, mainbuf+matches[2], mainbuf+matches[c*2-2]);
         }
-//        else if (matches[3] > 0) {
         else if (c == 1) {
           mainbuf[matches[3]] = '\0';
           process_setting(newinput, mainbuf+matches[2], NULL);
@@ -161,6 +159,21 @@ void read_config(char *config) {
       if (newinput->regex) printf(" with REGEX match \"%s\"", newinput->regex);
       printf("\n");
     }
+    else if (newinput->type & INPUT_LISTEN) {
+      if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
+      else if (newinput->valuex) newinput->subtype = TYPE_VALPOS;
+      else if (newinput->subtype);
+      else newinput->subtype = TYPE_COUNT;
+      if (newinput->interval < MIN_INTERVAL) {
+        if (newinput->interval) newinput->interval = MIN_INTERVAL;
+        else newinput->interval = DEF_INTERVAL;
+      }
+      printf("Input %s is type LISTEN subtype %s (%d sec interval)", newinput->name, subtype[newinput->subtype/2], newinput->interval);
+      if (newinput->delta) printf(" with mode DELTA");
+      if (newinput->consol) printf(" with consolidation function %s", consol[newinput->consol/2]);
+      if (newinput->regex) printf(" with REGEX match \"%s\"", newinput->regex);
+      printf("\n");
+    }
 
     // Check for incompatible mode specifications
     if (newinput->consol) {
@@ -179,6 +192,13 @@ void read_config(char *config) {
       if (newinput->namex) fprintf(stderr, "Input %s: mode TIME overrides NAMEX option\n", newinput->name);
       if (newinput->delta) fprintf(stderr, "Input %s: mode TIME overrides mode DELTA\n", newinput->name);
       if (newinput->consol) fprintf(stderr, "Input %s: mode TIME overrides consolidation function\n", newinput->name);
+    }
+    if (newinput->subtype & TYPE_AGGREGATE) {
+      if (newinput->line) fprintf(stderr, "Input %s: mode AGGREGATE overrides LINE option\n", newinput->name);
+      if (newinput->valuex) fprintf(stderr, "Input %s: mode AGGREGATE overrides VALUEX option\n", newinput->name);
+      if (newinput->namex) fprintf(stderr, "Input %s: mode AGGREGATE overrides NAMEX option\n", newinput->name);
+      if (newinput->delta) fprintf(stderr, "Input %s: mode AGGREGATE overrides mode DELTA\n", newinput->name);
+      if (newinput->consol) fprintf(stderr, "Input %s: mode AGGREGATE overrides consolidation function\n", newinput->name);
     }
   }
 }
@@ -199,6 +219,41 @@ void process_setting(input_t *input, char *name, char *value) {
         else settings.logsize = c;
       }
       else fprintf(stderr, "Invalid parameter in LOGSIZE setting: %s\n", value);
+      return;
+    }
+    else if (!strcasecmp("sqlite", name) && value) {
+      set(&settings.sqlite, value);
+      return;
+    }
+    else if (!strcasecmp("summaries", name) && value) {
+      int n, i = 0;
+      char *sum, *unit;
+
+      for (sum = strtok(value, " "); sum; sum = strtok(NULL, " ")) {
+        errno = 0;
+        n = strtol(sum, &unit, 10);
+        if (errno || n <= 0) {
+          fprintf(stderr, "Invalid summary period '%s' skipped\n", sum);
+          continue;
+        }
+        switch (*unit) {
+          case 's': break;
+          case 'm': n *= 60; break;
+          case 'h': n *= 3600; break;
+          case 'd': n *= 3600*24; break;
+          case 'w': n *= 3600*24*7; break;
+          case 'y': n *= 3600*24*365; break;
+          default: fprintf(stderr, "Invalid unit in summary period '%s' (skipped)\n", sum); continue;
+        }
+        if (n <= 0) {
+          fprintf(stderr, "Summary period '%s' skipped due to overflow\n", sum);
+          continue;
+        }
+        settings.summaries[i++] = n;
+        printf("Added summary period %d: %s\n", i, itodur(n));
+        if (i == SUMMARIES_MAX) break;
+      }
+      settings.nsummaries = i;
       return;
     }
     if (!value) printf("General setting '%s' is not valid or needs a parameter\n", name);
@@ -264,6 +319,38 @@ void process_setting(input_t *input, char *name, char *value) {
       set(&input->pipe->cmd, value);
     }
     else fprintf(stderr, "PIPE requested but type already set for %s\n", input->name);
+    return;
+  }
+  else if (!strcasecmp("listen", name) && value) {
+    if (!input->type) {
+      printf("Requested LISTEN on %s\n", value);
+      input->type = INPUT_LISTEN;
+      input->sock = (input_sock *)malloc(sizeof(input_sock));
+      if (!input->sock) {
+        fprintf(stderr, "Failed to allocate memory for input\n");
+        exit(-1);
+      }
+      memset(input->sock, 0, sizeof(input_sock));
+      if (strchr(value, ':')) {
+        if (value[0] == '*') input->sock->addr = INADDR_ANY;
+        else input->sock->addr = inet_addr(strtok(value, ":"));
+        if (input->sock->addr == INADDR_NONE) {
+          fprintf(stderr, "Invalid address specification for input %s: %s\n", input->name, value);
+          exit(-1);
+        }
+        value = strtok(NULL, "\0");
+      }
+      c = strtol(value, &cp, 10);
+      if (cp != value) {
+        if ((c < 1) || (c > 65535)) {
+          fprintf(stderr, "Port specification for input %s is out of range: %d\n", input->name, c);
+          exit(-1);
+        }
+        input->sock->port = c;
+      }
+      else fprintf(stderr, "Invalid port speficiation for input %s: %d\n", input->name, value);
+    }
+    else fprintf(stderr, "LISTEN requested but type already set for %s\n", input->name);
     return;
   }
 
@@ -405,6 +492,9 @@ void process_setting(input_t *input, char *name, char *value) {
     }
     else fprintf(stderr, "Invalid parameter in CRIT-BELOW setting: %s\n", value);
     return;
+  }
+  else if (!strcasecmp("aggregate", name)) {
+    input->subtype = TYPE_AGGREGATE;
   }
 
   if (!value) fprintf(stderr, "Unrecognised setting for %s: %s\n", input->name, name);
