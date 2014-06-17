@@ -15,6 +15,8 @@
 #include <sys/types.h>
 #include <sys/inotify.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <pcre.h>
@@ -72,6 +74,7 @@ int main(int argc, char *argv[]) {
   memset(&settings, 0, sizeof(settings));
 
   signal(SIGCHLD, SIG_IGN);
+  signal(SIGPIPE, SIG_IGN);
   signal(SIGWINCH, sig_winch);
   signal(SIGINT, do_exit);
   signal(SIGTERM, do_exit);
@@ -856,6 +859,56 @@ void process(input_t *input, float fl) {
   if (settings.monitor) update_block(input);
   else display(input);
   if (settings.logdir) write_log(input, fl);
+  if (settings.uplinkhost && settings.uplinkport) {
+    int c;
+    char buf[501];
+    buf[0] = 0;
+    if (settings.uplinkprefix) {
+      strcat(buf, settings.uplinkprefix);
+      strcat(buf, ".");
+    }
+    if (input->parent) {
+      strcat(buf, input->parent->name);
+      strcat(buf, ".");
+    }
+
+    sprintf(buf+strlen(buf), "%s %f %d\n", input->name, fl, now);
+
+    if (!settings.uplinksock) uplink_connect();
+    if (settings.uplinksock) {
+      c = write(settings.uplinksock, buf, strlen(buf));
+      if (c == -1) {
+        if (errno == EPIPE) {
+          close(settings.uplinksock);
+          settings.uplinksock = 0;
+        }
+      }
+    }
+  }
+}
+
+void uplink_connect() {
+  int c;
+  int sock;
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_addr.s_addr = inet_addr(settings.uplinkhost);
+  sa.sin_port = htons((unsigned int)settings.uplinkport);
+
+  if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+    fprintf(stderr, "Failed to create socket for uplink\n");
+    return;
+  }
+  setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, 0, 0);
+  if ((c = connect(sock, (struct sockaddr *) &sa, sizeof(sa))) < 0) {
+    if (errno != EINPROGRESS) {
+      fprintf(stderr, "Failed to connect to uplink host %s ([%d] %s) %d\n", settings.uplinkhost, errno, strerror(errno));
+      close(sock);
+      return;
+    }
+  }
+  settings.uplinksock = sock;
 }
 
 void report_consol(input_t *input) {

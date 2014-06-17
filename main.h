@@ -93,6 +93,10 @@ struct {
   int monitor;
   int winch;
   struct winsize ws;
+  char *uplinkhost;
+  int uplinkport;
+  int uplinksock;
+  char *uplinkprefix;
 } settings;
 
 char *type[] = {
@@ -166,3 +170,4 @@ void write_log(input_t *, float);
 char *gettok(char *, int, char);
 void sig_winch(int);
 void do_exit(int);
+void uplink_connect(void);

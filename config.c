@@ -201,6 +201,28 @@ void process_setting(input_t *input, char *name, char *value) {
       else fprintf(stderr, "Invalid parameter in LOGSIZE setting: %s\n", value);
       return;
     }
+    else if (!strcasecmp("uplink", name) && value) {
+      cp = strtok(value, " ");
+      set(&settings.uplinkhost, cp);
+      cp = strtok(NULL, " ");
+      if (!cp) {
+        fprintf(stderr, "Insufficient parameters in UPLINK setting\n");
+        return;
+      }
+      c = strtol(cp, NULL, 10);
+      if (c <= 0) {
+        fprintf(stderr, "Invalid port specified in UPLINK setting: %s\n", cp);
+        return;
+      }
+      settings.uplinkport = c;
+      cp = strtok(NULL, " ");
+      if (cp) {
+        set(&settings.uplinkprefix, cp);
+        printf("Configured uplink %s:%d\n", settings.uplinkhost, settings.uplinkport);
+      }
+      else printf("Configured uplink %s:%d with prefix \"%s\"\n", settings.uplinkhost, settings.uplinkport, settings.uplinkprefix);
+      return;
+    }
     if (!value) printf("General setting '%s' is not valid or needs a parameter\n", name);
     else printf("General setting '%s' set to \"%s\" is not valid\n", name, value);
     return;
