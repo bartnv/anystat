@@ -31,7 +31,7 @@
 #define MAIN_BUF_SIZE 4096
 #define VALUE_HIST_SIZE 100
 
-#define CONFIG_REGEX_NAME "^\\s*([a-zA-Z0-9_-]+)\\s*:\\s*$"
+#define CONFIG_REGEX_NAME "^\\s*([a-zA-Z0-9._-]+)\\s*:\\s*$"
 #define CONFIG_REGEX_SETTING "^\\s*([a-zA-Z-]+)\\s+(?:\"(.*?)\"|'(.*?)'|(.*?))\\s*$"
 
 #define MIN_INTERVAL 10
