@@ -290,6 +290,10 @@ int main(int argc, char *argv[]) {
             if (offset) parse_line(input, start);
 
             if (input->subtype & TYPE_COUNT) process(input, input->count);
+            else if (input->subtype & TYPE_NAMECOUNT) {
+              process(input, input->count);
+              for (input = input->next; input && input->parent; input = input->next) process(input, input->count);
+            }
             else if (input->time) {
               struct timeval tv;
               gettimeofday(&tv, NULL);
@@ -361,7 +365,7 @@ int main(int argc, char *argv[]) {
 }
 
 void do_cat(input_t *input) {
-  int c, r, ch, linebreak, inspace = 1, matches[30];
+  int c, r, ch, linebreak, inspace = 1, done = 0;
   char *name = NULL, *value = NULL;
   char *tok;
   FILE *fp;
@@ -373,109 +377,28 @@ void do_cat(input_t *input) {
 
   if (input->subtype & TYPE_NAMEVALPOS) input->update = now;  // type NAMEVALPOS doesn't set the parent update-time
 
-  c = 0;
-  while (fgets(mainbuf, MAIN_BUF_SIZE, fp)) {
-    if (input->pcre) {
-      if ((r = pcre_exec(input->pcre, NULL, mainbuf, strlen(mainbuf), 0, 0, matches, 30)) < 0) {
-        if (r < -1) fprintf(stderr, "pcre_exec returned error %d\n", r);
-        continue; // No match
-      }
-    }
-    c++;
+  while (!done && fgets(mainbuf, MAIN_BUF_SIZE, fp)) done = parse_line(input, mainbuf);
 
-    if (!(input->subtype & TYPE_COUNT)) {
-      if (c-input->skip <= 0) continue;
-      if (input->line && (c != input->line)) continue;
-
-      if (input->subtype & (TYPE_VALPOS|TYPE_LINEVALPOS)) {
-        if (input->pcre) {
-          if (!matches[input->valuex*2+1]) {
-            fprintf(stderr, "Not enough matches in regex \"%s\" for input %s to read value %d\n", input->regex, input->name, input->valuex);
-            break;
-          }
-          if (pcre_get_substring(mainbuf, matches, r?r:10, input->valuex, (const char **)&tok) <= 0) {
-            fprintf(stderr, "Failed to read substring %d from regex \"%s\" for input %s\n", input->valuex, input->regex, input->name);
-            break;
-          }
-        }
-        else {
-          tok = gettok(mainbuf, input->valuex, ' ');
-          if (!tok) {
-            fprintf(stderr, "Not enough words on line %d in input %s file %s\n", c, input->name, input->cat->filename);
-            break;
-          }
-        }
-        parse_value(input, tok);
-        if (input->line) {
-          fclose(fp);
-          return;
-        }
-      }
-      else if (input->subtype & (TYPE_NAMECOUNT|TYPE_NAMEVALPOS)) {
-        if (input->pcre) {
-          if (!matches[input->namex*2+1]) {
-            fprintf(stderr, "Not enough matches in regex \"%s\" for input %s to read value %d\n", input->regex, input->name, input->namex);
-            break;
-          }
-          if (pcre_get_substring(mainbuf, matches, r?r:10, input->namex, (const char **)&name) <= 0) {
-            fprintf(stderr, "Failed to read substring %d from regex \"%s\" for input %s\n", input->valuex, input->regex, input->name);
-            break;
-          }
-
-          if (input->subtype & TYPE_NAMEVALPOS) {
-            if (!matches[input->valuex*2+1]) {
-              fprintf(stderr, "Not enough matches in regex \"%s\" for input %s to read value %d\n", input->regex, input->name, input->valuex);
-              break;
-            }
-            if (pcre_get_substring(mainbuf, matches, r?r:10, input->valuex, (const char **)&value) <= 0) {
-              fprintf(stderr, "Failed to read substring %d from regex \"%s\" for input %s\n", input->valuex, input->regex, input->name);
-              break;
-            }
-          }
-          else input->count++;
-
-          do_namepos(input, name, value);
-        }
-        else {
-          if (!(tok = gettok(mainbuf, input->namex, ' '))) {
-            fprintf(stderr, "Input %s: word %d not found on line: %s\n", input->name, input->namex, mainbuf);
-            return;
-          }
-          set(&name, tok);
-          if (input->subtype & TYPE_NAMEVALPOS) {
-            if (!(tok = gettok(mainbuf, input->valuex, ' '))) {
-              fprintf(stderr, "Input %s: word %d not found on line: %s\n", input->name, input->valuex, mainbuf);
-              return;
-            }
-          }
-          else {
-            tok = NULL;
-            input->count++;
-          }
-          do_namepos(input, name, tok);
-          free(name);
-          name = NULL;
-        }
-      }
-    }
-  }
-  if (input->subtype & TYPE_COUNT) {
-    if (c-input->skip > 0) process(input, c-input->skip);
+  if (input->subtype & TYPE_COUNT) process(input, input->count);
+  else if (input->subtype & TYPE_NAMECOUNT) {
+    process(input, input->count);
+    for (input = input->next; input && input->parent; input = input->next) process(input, input->count);
   }
 
   if (input->consol && !(input->consol & CONSOL_FIRST)) report_consol(input);
 
   if (feof(fp)) {
-    if (input->line) fprintf(stderr, "Not enough lines in file %s (line %d requested, only %d found)\n", input->cat->filename, input->line, c);
-    if (input->skip > c) fprintf(stderr, "Not enough lines in file %s (skip %d specified, only %d lines found)\n", input->cat->filename, input->skip, c);
+    if (input->line) fprintf(stderr, "Not enough lines in file %s (line %d requested, only %d found)\n", input->cat->filename, input->line, input->count);
+    if (input->skip > input->count) fprintf(stderr, "Not enough lines in file %s (skip %d specified, only %d lines found)\n", input->cat->filename, input->skip, input->count);
   }
 
   fclose(fp);
+  input->count = 0;
 }
 
 void do_tail(input_t *input) {
-  char *tok;
-  int r, inspace = 1;
+  char *tok, *start, *end;
+  int c, r, inspace = 1, offset = 0;
   struct stat statbuf;
 
   if (!input->tail->reopen) {
@@ -493,7 +416,7 @@ void do_tail(input_t *input) {
     else perror("stat()");
   }
 
-  do_tail_fp(input, input->tail->fp);
+  do_tail_fp(input, input->tail->fp, 1);
 
   if (input->tail->reopen) {
     if (!input->tail->fpnew) {
@@ -514,7 +437,7 @@ void do_tail(input_t *input) {
             input->tail->fpnew = 0;
             fprintf(stderr, "Error adding inotify watch for input %s file %s: %m\n", input->name, input->tail->filename);
           }
-          else do_tail_fp(input, input->tail->fpnew);
+          else do_tail_fp(input, input->tail->fpnew, 0);
         }
       }
     }
@@ -527,104 +450,50 @@ void do_tail(input_t *input) {
         input->tail->reopen = 0;
         if (stat(input->tail->filename, &statbuf) != -1) input->tail->size = statbuf.st_size;
         else input->tail->size = 0;
-        do_tail_fp(input, input->tail->fp);
+        do_tail_fp(input, input->tail->fp, 1);
       }
       else {
         input->tail->reopen++;
-        do_tail_fp(input, input->tail->fpnew);
+        do_tail_fp(input, input->tail->fpnew, 0);
       }
     }
     if (input->tail->reopen > 2) fprintf(stderr, "Input %s running in dual file mode for more than 2 cycles\n", input->name);
   }
 
-  if (input->subtype & TYPE_COUNT) {
-    process(input, input->count);
-    input->count = 0;
-  }
+  if (input->subtype & TYPE_COUNT) process(input, input->count);
   else if (input->subtype & TYPE_NAMECOUNT) {
     process(input, input->count);
-    input->count = 0;
-    for (input = input->next; input && input->parent; input = input->next) {
-      process(input, input->count);
-      input->count = 0;
-    }
+    for (input = input->next; input && input->parent; input = input->next) process(input, input->count);
   }
+  input->count = 0;
 }
 
-void do_tail_fp(input_t *input, FILE *fp) {
-  char *tok = NULL, *name = NULL;
-  int r, inspace = 1, matches[30];
+void do_tail_fp(input_t *input, FILE *fp, int use_buffer) {
+  int offset = 0, c;
+  char *start, *end;
 
-  while (fgets(mainbuf, MAIN_BUF_SIZE, fp)) {
-    if (input->pcre) {
-      if ((r = pcre_exec(input->pcre, NULL, mainbuf, strlen(mainbuf), 0, 0, matches, 30)) < 0) {
-        if (r < -1) fprintf(stderr, "pcre_exec returned error %d\n", r);
-        continue; // No match
-      }
-    }
+  if (use_buffer && input->buffer) {
+    strcpy(mainbuf, input->buffer);
+    offset = strlen(mainbuf);
+    free(input->buffer);
+    input->buffer = NULL;
+  }
+  else *mainbuf = '\0';
 
-    if (input->subtype & TYPE_COUNT) input->count++;
-    else if (input->subtype & (TYPE_NAMECOUNT|TYPE_NAMEVALPOS)) {
-      if (input->pcre) {
-        if (!matches[input->namex*2+1]) {
-          fprintf(stderr, "Not enough matches in regex \"%s\" for input %s to read value %d\n", input->regex, input->name, input->namex);
-          break;
-        }
-        if (pcre_get_substring(mainbuf, matches, r?r:10, input->namex, (const char **)&name) <= 0) {
-          fprintf(stderr, "Failed to read substring %d from regex \"%s\" for input %s\n", input->valuex, input->regex, input->name);
-          break;
-        }
+  while ((c = read(fileno(fp), mainbuf+offset, MAIN_BUF_SIZE-offset)) > 0) {
+    mainbuf[c+offset] = '\0';
+    start = mainbuf;
+    while ((end = strchr(start, '\n'))) {
+      *end = '\0';
+      parse_line(input, start);
+      start = end+1;
+    }
+    offset = strlen(start);
+  }
 
-        if (input->subtype & TYPE_NAMEVALPOS) {
-          if (!matches[input->valuex*2+1]) {
-            fprintf(stderr, "Not enough matches in regex \"%s\" for input %s to read value %d\n", input->regex, input->name, input->valuex);
-            break;
-          }
-          if (pcre_get_substring(mainbuf, matches, r?r:10, input->valuex, (const char **)&tok) <= 0) {
-            fprintf(stderr, "Failed to read substring %d from regex \"%s\" for input %s\n", input->valuex, input->regex, input->name);
-            break;
-          }
-        }
-        else input->count++;
-      }
-      else {
-        if (!(tok = gettok(mainbuf, input->namex, ' '))) {
-          fprintf(stderr, "Input %s: word %d not found on line: %s\n", input->name, input->namex, mainbuf);
-          return;
-        }
-        set(&name, tok);
-        if (input->subtype & TYPE_NAMEVALPOS) {
-          if (!(tok = gettok(mainbuf, input->valuex, ' '))) {
-            fprintf(stderr, "Input %s: word %d not found on line: %s\n", input->name, input->valuex, mainbuf);
-            return;
-          }
-        }
-        else {
-          tok = NULL;
-          input->count++;
-        }
-      }
-      do_namepos(input, name, tok);
-      free(name);
-      name = NULL;
-    }
-    else if (input->subtype & TYPE_VALPOS) {
-      if (input->pcre) {
-        if (!matches[input->valuex*2+1]) {
-          fprintf(stderr, "Not enough matches in regex \"%s\" for input %s to read value %d\n", input->regex, input->name, input->valuex);
-          break;
-        }
-        if (pcre_get_substring(mainbuf, matches, r?r:10, input->valuex, (const char **)&tok) <= 0) {
-          fprintf(stderr, "Failed to read substring %d from regex \"%s\" for input %s\n", input->valuex, input->regex, input->name);
-          break;
-        }
-      }
-      else if (!(tok = gettok(mainbuf, input->valuex, ' '))) {
-        fprintf(stderr, "Not enough words on line in tail of file %s for input %s\n", input->tail->filename, input->name);
-        return;
-      }
-      parse_value(input, tok);
-    }
+  if (use_buffer && offset) {
+    input->buffer = (char *)malloc(strlen(start)+1);
+    strcpy(input->buffer, start);
   }
 }
 
@@ -689,18 +558,12 @@ void do_namepos(input_t *input, char *name, char *value) {
 }
 
 void do_pipe(input_t *input) {
-  if (input->subtype & TYPE_COUNT) {
-    process(input, input->count);
-    input->count = 0;
-  }
+  if (input->subtype & TYPE_COUNT) process(input, input->count);
   else if (input->subtype & TYPE_NAMECOUNT) {
     process(input, input->count);
-    input->count = 0;
-    for (input = input->next; input && input->parent; input = input->next) {
-      process(input, input->count);
-      input->count = 0;
-    }
+    for (input = input->next; input && input->parent; input = input->next) process(input, input->count);
   }
+  input->count = 0;
 }
 
 int parse_line(input_t *input, char *line) {

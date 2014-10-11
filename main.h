@@ -157,7 +157,7 @@ char mainbuf[MAIN_BUF_SIZE+1];
 
 void do_cat(input_t *);
 void do_tail(input_t *);
-void do_tail_fp(input_t *, FILE *);
+void do_tail_fp(input_t *, FILE *, int);
 void do_namepos(input_t *, char *, char *);
 void do_pipe(input_t *);
 int parse_line(input_t *, char *);
