@@ -74,6 +74,7 @@ void update_block(input_t *input) {
   float prev, cur, min = FLT_MAX, max = FLT_MIN, avg, valsum, devsum, rocsum;
   int count, curts, prevts;
   sqlite3_stmt *stmt;
+  time_t now = time(NULL);
 
   switch (input->valcnt) {
     default: mvwaddstr(input->win, 4, 7, format_float(input, input->roclast));
@@ -89,12 +90,13 @@ void update_block(input_t *input) {
 
   if (db) {
     for (n = 0; n < settings.nsummaries; n++) {
+      if (input->valcnt%((n+1)*10)) continue;
       min = FLT_MAX;
       max = FLT_MIN;
       avg = valsum = devsum = rocsum = 0;
       count = 0;
 
-      i = sprintf(query, "SELECT `value`, `ts` FROM `data` WHERE `input` = %d AND ts > %d", input->sqlid, time(NULL)-settings.summaries[n]);
+      i = sprintf(query, "SELECT `value`, `ts` FROM `data` WHERE `input` = %d AND ts > %d", input->sqlid, now-settings.summaries[n]);
       sqlite3_prepare_v2(db, query, i+1, &stmt, NULL);
       if (!stmt) return;
       while ((i = sqlite3_step(stmt)) == SQLITE_ROW) {
