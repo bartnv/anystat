@@ -72,7 +72,7 @@ void update_block(input_t *input) {
   int i, n, histcount;
   char query[100];
   float prev, cur, min = FLT_MAX, max = FLT_MIN, avg, valsum, devsum, rocsum;
-  int count, curts, prevts;
+  int count, curts, prevts, mints;
   sqlite3_stmt *stmt;
   time_t now = time(NULL);
 
@@ -93,6 +93,7 @@ void update_block(input_t *input) {
       if (input->valcnt%((n+1)*10)) continue;
       min = FLT_MAX;
       max = FLT_MIN;
+      mints = INT_MAX;
       avg = valsum = devsum = rocsum = 0;
       count = 0;
 
@@ -105,6 +106,7 @@ void update_block(input_t *input) {
         curts = sqlite3_column_int(stmt, 1);
         if (cur < min) min = cur;
         if (cur > max) max = cur;
+        if (curts < mints) mints = curts;
         if (count) rocsum += abs(cur-prev)/(curts-prevts);
         prev = cur;
         prevts = curts;
@@ -114,7 +116,7 @@ void update_block(input_t *input) {
       }
       sqlite3_finalize(stmt);
       if (i != SQLITE_DONE) return;
-      if (count) update_summary(input, 14+(n*7), count, valsum, devsum, rocsum, min, max);
+      if (count && (now-mints > settings.summaries[n]*0.5)) update_summary(input, 14+(n*7), count, valsum, devsum, rocsum, min, max);
     }
   }
   else {

@@ -10,7 +10,8 @@
 #include <errno.h>
 #include <time.h>
 #include <math.h>
-#include <float.h> // FLT_MIN and FLT_MAX defines
+#include <float.h> // FLT_MIN and FLT_MAX constants
+#include <limits.h> // INT_MIN and INT_MAX constants
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/inotify.h>
