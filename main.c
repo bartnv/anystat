@@ -1,4 +1,4 @@
-#define _GNU_SOURCE // Needed for versionsort()... makes this code unportable beyond Linux
+#define _GNU_SOURCE // Needed for versionsort()... makes this code unportable beyond Linux because I'm lazy
 //#define _X_OPEN_SOURCE_EXTENDED // Needed for wide-character use of ncurses
 
 #include <stdlib.h>
@@ -15,8 +15,8 @@
 #include <sys/types.h>
 #include <sys/inotify.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include <netinet/ip.h> // INADDR_ANY and INADDR_NONE macro's
+#include <arpa/inet.h> // inet_addr()
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <pcre.h>
@@ -25,11 +25,13 @@
 #include <dirent.h> // scandir(), versionsort()
 #include <ncursesw/curses.h> // ncurses functions in ncurses.c and WINDOW declaration in main.h
 #include <locale.h> // setlocale()
+#include <sqlite3.h> // sqlite support (probably make this an IFDEF in the future to avoid always having this dependency)
 
 #define CONFIG_FILE "/etc/anystat.conf"
 
 #define MAIN_BUF_SIZE 4096
 #define VALUE_HIST_SIZE 100
+#define SUMMARIES_MAX 5		// Max number of summary-columns in monitoring mode
 
 #define CONFIG_REGEX_NAME "^\\s*([a-zA-Z0-9._-]+)\\s*:\\s*$"
 #define CONFIG_REGEX_SETTING "^\\s*([a-zA-Z-]+)\\s+(?:\"(.*?)\"|'(.*?)'|(.*?))\\s*$"
@@ -37,20 +39,23 @@
 #define MIN_INTERVAL 10
 #define DEF_INTERVAL 60
 
-#define INPUT_CAT   1	// Periodically read file
-#define INPUT_TAIL  2	// Continuously read file
-#define INPUT_CMD   4	// Periodically read command output
-#define INPUT_PIPE  8	// Continuously read command output
-#define INPUT_FIFO 16	// Continuously read fifo
-#define INPUT_SOCK 32	// Continuously read socket
+#define INPUT_CAT      1	// Periodically read file
+#define INPUT_TAIL     2	// Continuously read file
+#define INPUT_CMD      4	// Periodically read command output
+#define INPUT_PIPE     8	// Continuously read command output
+#define INPUT_FIFO    16	// Continuously read fifo
+#define INPUT_LISTEN  32	// Bind to port and read data
+#define INPUT_CONNECT 64	// Connect to port and read data
 
 #define TYPE_COUNT               1	// Count output lines;
 #define TYPE_VALPOS              2	// Read value from word x on each line
 #define TYPE_LINEVALPOS          4	// Read value from word x on line y
 #define TYPE_NAMECOUNT           8	// Count output lines grouped by name
 #define TYPE_NAMEVALPOS         16	// Read value from word x on each line; group by name read from word y
-#define TYPE_TIME		32	// For periodical inputs: record the time taken to complete the operation
+#define TYPE_TIME		32	// For periodic inputs: record the time taken to complete the operation
 					// For continuous inputs: record the time between output lines
+#define TYPE_AGGREGATE		64	// Read uplink output from another anystat value; reads values prefixed
+					//  with one or more levels of hierarchy names
 
 #define CONSOL_FIRST		 1
 #define CONSOL_LAST		 2
@@ -106,6 +111,56 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Failed to change to log directory '%s': %s (logging disabled)\n", settings.logdir, strerror(errno));
     set(&settings.logdir, NULL);
   }
+
+  if (settings.sqlite) {
+    int id;
+    const unsigned char *name, *sub;
+    sqlite3_stmt *stmt;
+
+    if ((c = sqlite3_open(settings.sqlite, &db))) {
+      fprintf(stderr, "Failed to open sqlite database '%s': %s (logging disabled)\n", settings.sqlite, sqlite3_errmsg(db));
+      return EXIT_FAILURE;
+    }
+    printf("Opened SQLite database %s\n", settings.sqlite);
+    sqlite3_prepare_v2(db, "SELECT `id`, `name`, `sub` FROM inputs", 39, &stmt, NULL);
+    if (!stmt) {
+      fprintf(stderr, "Failed to prepare query for inputs on SQLite db: %s\n", sqlite3_errmsg(db));
+      return EXIT_FAILURE;
+    }
+    while ((c = sqlite3_step(stmt)) == SQLITE_ROW) {
+      if (sqlite3_column_count(stmt) != 3) break;
+      id = sqlite3_column_int(stmt, 0);
+      name = sqlite3_column_text(stmt, 1);
+      sub = sqlite3_column_text(stmt, 2);
+      for (input = inputs; input; input = input->next) {
+        if (input->parent) {
+          if (sub && !strcmp(input->name, sub) && !strcmp(input->parent->name, name)) input->sqlid = id;
+        }
+        else if (!sub && !strcmp(input->name, name)) input->sqlid = id;
+      }
+    }
+    if (c != SQLITE_DONE) {
+      fprintf(stderr, "Error while reading inputs from SQLite db: %s\n", sqlite3_errmsg(db));
+      return EXIT_FAILURE;
+    }
+    for (input = inputs; input; input = input->next) {
+      if (!input->sqlid) {
+        char *err, query[100];
+        if (input->parent) sprintf(query, "INSERT INTO `inputs` (`name`, `sub`) VALUES ('%s', '%s')", input->parent->name, input->name);
+        else sprintf(query, "INSERT INTO `inputs` (`name`) VALUES ('%s')", input->name);
+        if (sqlite3_exec(db, query, NULL, NULL, &err) != SQLITE_OK) {
+          fprintf(stderr, "Sqlite error: %s\n", err);
+          sqlite3_free(err);
+        }
+        else {
+          input->sqlid = sqlite3_last_insert_rowid(db);
+          printf("Added new input %s to SQLite db with id %d\n", input->name, input->sqlid);
+        }
+      }
+    }
+  }
+  else db = NULL;
+
   start_tails();
   start_pipes();
   open_fifos();
@@ -209,7 +264,7 @@ int main(int argc, char *argv[]) {
           settings.winch = 0;
         }
         else {
-          printf("select() interrupted\n");
+          if (!settings.monitor) printf("select() interrupted\n");
           sleep(1);
         }
         continue;
@@ -234,12 +289,12 @@ int main(int argc, char *argv[]) {
                   else if (statbuf.st_size < input->tail->size) {
                     rewind(input->tail->fp);
                     do_tail(input);
-                    printf("Input file for %s has shrunk %d bytes\n", input->name, input->tail->size-statbuf.st_size);
+                    if (!settings.monitor) printf("Input file for %s has shrunk %d bytes\n", input->name, input->tail->size-statbuf.st_size);
                   }
                   else if (statbuf.st_size == input->tail->size) {
                     rewind(input->tail->fp);
                     do_tail(input);
-                    printf("Input file for %s has been modified, but has not changed size\n", input->name);
+                    if (!settings.monitor) printf("Input file for %s has been modified, but has not changed size\n", input->name);
                   }
                   input->tail->size = statbuf.st_size;
                 }
@@ -256,7 +311,7 @@ int main(int argc, char *argv[]) {
               break;
             }
           }
-          if (!input) fprintf(stderr, "No input found matching inotify event\n");
+          if (!input && !settings.monitor) fprintf(stderr, "No input found matching inotify event\n");
         }
       }
       for (input = inputs; input; input = input->next) {
@@ -355,7 +410,7 @@ int main(int argc, char *argv[]) {
             }
           }
           else {
-            printf("Input %s closed pipe unexpectedly\n", input->name);
+            if (!settings.monitor) printf("Input %s closed pipe unexpectedly\n", input->name);
           }
         }
       }
@@ -547,6 +602,32 @@ void do_namepos(input_t *input, char *name, char *value) {
       newchild->crit_below = (float *)malloc(sizeof(float));
       *newchild->crit_below = *input->crit_below;
     }
+
+    if (db) {
+      int c;
+      char *err, query[100];
+      sqlite3_stmt *stmt;
+
+      if (newchild->parent) c = sprintf(query, "SELECT `id` FROM `inputs` WHERE `name` = '%s' AND `sub` = '%s'", newchild->parent->name, newchild->name);
+      else c = sprintf(query, "SELECT `id` FROM `inputs` WHERE `name` = '%s' AND `sub` IS NULL", newchild->name);
+      sqlite3_prepare_v2(db, query, -1, &stmt, NULL);
+      if (stmt && (sqlite3_step(stmt) == SQLITE_ROW)) newchild->sqlid = sqlite3_column_int(stmt, 0);
+      else {
+        sqlite3_finalize(stmt);
+
+        if (newchild->parent) sprintf(query, "INSERT INTO `inputs` (`name`, `sub`) VALUES ('%s', '%s')", newchild->parent->name, newchild->name);
+        else sprintf(query, "INSERT INTO `inputs` (`name`) VALUES ('%s')", newchild->name);
+        if (sqlite3_exec(db, query, NULL, NULL, &err) != SQLITE_OK) {
+          fprintf(stderr, "Sqlite error: %s\n", err);
+          sqlite3_free(err);
+        }
+        else {
+          newchild->sqlid = sqlite3_last_insert_rowid(db);
+          if (!settings.monitor) printf("Added new input %s to SQLite db with id %d\n", newchild->name, newchild->sqlid);
+        }
+      }
+    }
+
     if (settings.monitor) {
       create_block(newchild);
       arrange_blocks();
@@ -712,6 +793,12 @@ void process(input_t *input, float fl) {
     input->rocsum += input->roclast;
     input->amplast = fabsf(fl-input->valsum/input->valcnt);
     input->ampsum += input->amplast;
+    if (fl < input->valmin) input->valmin = fl;
+    if (fl > input->valmax) input->valmax = fl;
+  }
+  else {
+    input->valmin = fl;
+    input->valmax = fl;
   }
 
   input->update = now;
@@ -719,8 +806,19 @@ void process(input_t *input, float fl) {
   else input->vallast++;
   *input->vallast = fl;
 
+  if (settings.logdir) write_log(input, fl);
+  if (db && input->sqlid) {
+    char *err, query[100];
+    sprintf(query, "INSERT INTO `data` (`input`, `ts`, `value`) VALUES (%d, %d, %f)", input->sqlid, now, fl);
+    if (sqlite3_exec(db, query, NULL, NULL, &err) != SQLITE_OK) {
+      fprintf(stderr, "Sqlite error: %s\n", err);
+      sqlite3_free(err);
+    }
+  }
+
   if (settings.monitor) update_block(input);
   else display(input);
+
   if (settings.logdir) write_log(input, fl);
   if (settings.uplinkhost && settings.uplinkport) {
     int c;
@@ -942,6 +1040,49 @@ char *gettok(char *str, int n, char delim) {
   strncpy(tok, start, str-start);
   tok[str-start] = '\0';
   return tok;
+}
+
+char *itoa(int digits) {
+   static char buf[11];
+   char *ptr = buf;
+   int r, c = 1;
+
+   while (digits/c > 9) c *= 10;
+   do {
+      r = digits/c;
+      *ptr++ = r+48;
+      digits -= r*c;
+      c /= 10;
+   } while (c);
+   *ptr = 0;
+   return buf;
+}
+
+char *itodur(int digits) {
+   static char buf[9];
+   static int delta[] = { 31449600, 604800, 86400, 3600, 60, 1 };
+   static char unit[] = "ywdhms";
+   int c, r;
+   char *ptr;
+
+   memset(buf, 0, 9);
+
+   if (!digits) {
+      strcpy(buf, "0s");
+      return buf;
+   }
+
+   for (c = 0; digits < delta[c]; c++);
+   strcpy(buf, itoa(digits/delta[c]));
+   ptr = strchr(buf, '\0');
+   *ptr = unit[c];
+   if ((r = digits%delta[c])) {
+      *++ptr = ' ';
+      strcat(buf, itoa(r/delta[++c]));
+      ptr = strchr(buf, '\0');
+      *ptr = unit[c];
+   }
+   return buf;
 }
 
 void sig_winch(int sig) {
