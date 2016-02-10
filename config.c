@@ -129,6 +129,7 @@ void read_config(char *config) {
         if (!newinput->line) newinput->subtype = TYPE_VALPOS;
         else newinput->subtype = TYPE_LINEVALPOS;
       }
+      else if (newinput->namex) newinput->subtype = TYPE_NAMECOUNT;
       else newinput->subtype = TYPE_COUNT;
       if (newinput->interval < MIN_INTERVAL) {
         if (newinput->interval) newinput->interval = MIN_INTERVAL;
@@ -146,6 +147,7 @@ void read_config(char *config) {
       if (newinput->time) newinput->subtype = TYPE_TIME;
       else if (newinput->valuex && newinput->namex) newinput->subtype = TYPE_NAMEVALPOS;
       else if (newinput->valuex) newinput->subtype = TYPE_VALPOS;
+      else if (newinput->namex) newinput->subtype = TYPE_NAMECOUNT;
       else newinput->subtype = TYPE_COUNT;
       if (newinput->interval < MIN_INTERVAL) {
         if (newinput->interval) newinput->interval = MIN_INTERVAL;
