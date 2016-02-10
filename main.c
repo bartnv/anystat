@@ -347,8 +347,12 @@ int main(int argc, char *argv[]) {
 
             if (input->subtype & TYPE_COUNT) process(input, input->count);
             else if (input->subtype & TYPE_NAMECOUNT) {
+              input_t *sub;
               process(input, input->count);
-              for (input = input->next; input && input->parent; input = input->next) process(input, input->count);
+              for (sub = input->next; sub && sub->parent; sub = sub->next) {
+                process(sub, sub->count);
+                sub->count = 0;
+              }
             }
             else if (input->time) {
               struct timeval tv;
@@ -635,7 +639,7 @@ void do_namepos(input_t *input, char *name, char *value) {
     }
     else printf("Input %s: created new child %s\n", input->name, child->next->name);
   }
-  if (value) parse_value(child->next, value);  // subtype is TYPE_NAMEVALPOS
+  if (value) parse_value(child->next, value); // subtype is TYPE_NAMEVALPOS
   else child->next->count++;  // subtype is TYPE_NAMECOUNT
 }
 
@@ -766,6 +770,8 @@ void consolidate(input_t *input, float fl) {
 
 void process(input_t *input, float fl) {
   float tmpfl;
+
+  if ((input->update == now) && (*input->vallast == fl)) return;
 
   if (input->delta) {
     tmpfl = fl;
