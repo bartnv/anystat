@@ -180,7 +180,7 @@ void read_config(char *config) {
     // Check for incompatible mode specifications
     if (newinput->consol) {
       if ((newinput->type & (INPUT_TAIL|INPUT_PIPE)) && !newinput->interval) {
-        fprintf(stderr, "Input %s type %s without specified interval cannot use consolidation function\n", newinput->name, type[input->type/2]);
+        fprintf(stderr, "Input %s type %s without specified interval cannot use consolidation function\n", newinput->name, type[newinput->type/2]);
         exit(-1);
       }
       if (newinput->subtype & (TYPE_COUNT|TYPE_LINEVALPOS|TYPE_NAMECOUNT)) {
