@@ -57,6 +57,8 @@ typedef struct input_t {
   float *warn_below;
   float *crit_above;
   float *crit_below;
+  int alert;
+  int alert_last;
   pcre *pcre;
   int delta;
   int time;
@@ -112,6 +114,8 @@ struct {
   char *sqlite;
   int summaries[SUMMARIES_MAX];
   int nsummaries;
+  char *alertcmd;
+  int alertrepeat;
 } settings;
 
 char *type[] = {

@@ -280,6 +280,37 @@ void process_setting(input_t *input, char *name, char *value) {
       settings.nsummaries = i;
       return;
     }
+    else if (!strcasecmp("alert-cmd", name) && value) {
+      printf("Configured alert command %s\n", value);
+      set(&settings.alertcmd, value);
+      return;
+    }
+    else if (!strcasecmp("alert-repeat", name) && value) {
+      int n;
+      char *unit;
+      n = strtol(value, &unit, 10);
+      if (errno || n <= 0) {
+        fprintf(stderr, "Invalid value for alert-repeat setting: %s\n", value);
+        return;
+      }
+      switch (*unit) {
+        case 's': break;
+        case 'm': n *= 60; break;
+        case 'h': n *= 3600; break;
+        case 'd': n *= 3600*24; break;
+        case 'w': n *= 3600*24*7; break;
+        case 'y': n *= 3600*24*365; break;
+        default: fprintf(stderr, "Invalid unit in alert-repeat setting '%s' (ignored)\n", value);
+      }
+      if (n <= 0) {
+        fprintf(stderr, "Alert-repeat setting '%s' ignored due to overflow\n", value);
+        return;
+      }
+      printf("Configured alert-repeat setting of %d seconds\n", n);
+      settings.alertrepeat = n;
+      return;
+    }
+
     if (!value) printf("General setting '%s' is not valid or needs a parameter\n", name);
     else printf("General setting '%s' set to \"%s\" is not valid\n", name, value);
     return;
@@ -519,6 +550,19 @@ void process_setting(input_t *input, char *name, char *value) {
   }
   else if (!strcasecmp("aggregate", name)) {
     input->subtype = TYPE_AGGREGATE;
+    return;
+  }
+  else if (!strcasecmp("alert-on", name) && value) {
+    if (!strncasecmp("warn", value, 4)) {
+      input->alert = ALERT_WARN;
+      printf("Running alert-cmd for input %s on warning levels\n", input->name);
+    }
+    else if (!strncasecmp("crit", value, 4)) {
+      input->alert = ALERT_CRIT;
+      printf("Running alert-cmd for input %s on critical levels\n", input->name);
+    }
+    else fprintf(stderr, "Invalid parameter in ALERT-ON setting: %s\n", value);
+    return;
   }
 
   if (!value) fprintf(stderr, "Unrecognised setting for %s: %s\n", input->name, name);
@@ -594,6 +638,24 @@ void start_pipe(input_t *input) {
       printf("Pipe input %s launched succesfully with PID %d\n", input->name, input->pipe->pid);
 //      input->pipe->fp = fdopen(input->pipe->fds[0], "r");
 //      setlinebuf(input->pipe->fp);
+  }
+}
+
+void send_alert(char *msg) {
+  int c;
+  char *argv[3];
+
+  switch ((c = fork())) {
+    case -1: fprintf(stderr, "Failed to fork alert command\n"); break;
+    case 0: /* CHILD */
+      argv[0] = settings.alertcmd;
+      argv[1] = msg;
+      argv[2] = NULL;
+      execve(settings.alertcmd, argv, NULL);
+      fprintf(stderr, "Failed to execute alert command\n");
+      exit(EXIT_FAILURE);
+    default: /* PARENT */
+      printf("Launched alert command with PID %d\n", c);
   }
 }
 

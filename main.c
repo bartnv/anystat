@@ -65,6 +65,9 @@
 #define CONSOL_SUM		16
 #define CONSOL_AVG		32
 
+#define ALERT_WARN		 1
+#define ALERT_CRIT		 2
+
 #include "main.h"
 #include "ncurses.c"
 #include "config.c"
@@ -579,6 +582,7 @@ void do_namepos(input_t *input, char *name, char *value) {
     if (input->delta) newchild->delta = input->delta;
     if (input->consol) newchild->consol = input->consol;
     if (input->rate) newchild->rate = input->rate;
+    if (input->alert) newchild->alert = input->alert;
     if (input->scale_min) {
       newchild->scale_min = (float *)malloc(sizeof(float));
       *newchild->scale_min = *input->scale_min;
@@ -770,6 +774,7 @@ void consolidate(input_t *input, float fl) {
 
 void process(input_t *input, float fl) {
   float tmpfl;
+  char msgbuf[100];
 
   if ((input->update == now) && (*input->vallast == fl)) return;
 
@@ -825,6 +830,39 @@ void process(input_t *input, float fl) {
 
   if (settings.monitor) update_block(input);
   else display(input);
+
+  if (input->alert >= ALERT_WARN) {
+    if (input->warn_above && (*input->vallast > *input->warn_above)) {
+      snprintf(msgbuf, 100, "Warning on input %s: %f\n", input->name, *input->vallast);
+      if (settings.alertrepeat && (input->alert_last+settings.alertrepeat < now)) {
+        send_alert(msgbuf);
+        input->alert_last = now;
+      }
+    }
+    else if (input->warn_below && (*input->vallast < *input->warn_below)) {
+      snprintf(msgbuf, 100, "Warning on input %s: %f\n", input->name, *input->vallast);
+      if (settings.alertrepeat && (input->alert_last+settings.alertrepeat < now)) {
+        send_alert(msgbuf);
+        input->alert_last = now;
+      }
+    }
+  }
+  else if (input->alert >= ALERT_CRIT) {
+    if (input->crit_above && (*input->vallast > *input->crit_above)) {
+      snprintf(msgbuf, 100, "Critical on input %s: %f\n", input->name, *input->vallast);
+      if (settings.alertrepeat && (input->alert_last+settings.alertrepeat < now)) {
+        send_alert(msgbuf);
+        input->alert_last = now;
+      }
+    }
+    else if (input->crit_below && (*input->vallast < *input->crit_below)) {
+      snprintf(msgbuf, 100, "Critical on input %s: %f\n", input->name, *input->vallast);
+      if (settings.alertrepeat && (input->alert_last+settings.alertrepeat < now)) {
+        send_alert(msgbuf);
+        input->alert_last = now;
+      }
+    }
+  }
 
   if (settings.logdir) write_log(input, fl);
   if (settings.uplinkhost && settings.uplinkport) {
