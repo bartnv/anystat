@@ -831,36 +831,20 @@ void process(input_t *input, float fl) {
   if (settings.monitor) update_block(input);
   else display(input);
 
-  if (input->alert >= ALERT_WARN) {
-    if (input->warn_above && (*input->vallast > *input->warn_above)) {
-      snprintf(msgbuf, 100, "Warning on input %s: %f\n", input->name, *input->vallast);
-      if (settings.alertrepeat && (input->alert_last+settings.alertrepeat < now)) {
-        send_alert(msgbuf);
-        input->alert_last = now;
-      }
-    }
-    else if (input->warn_below && (*input->vallast < *input->warn_below)) {
-      snprintf(msgbuf, 100, "Warning on input %s: %f\n", input->name, *input->vallast);
-      if (settings.alertrepeat && (input->alert_last+settings.alertrepeat < now)) {
-        send_alert(msgbuf);
-        input->alert_last = now;
-      }
+  if ((input->alert >= ALERT_WARN) && ((input->warn_above && (*input->vallast > *input->warn_above)) || (input->warn_below && (*input->vallast < *input->warn_below)))) {
+    if (!input->parent) snprintf(msgbuf, 100, "Warning on input %s: %f\n", input->name, *input->vallast);
+    else snprintf(msgbuf, 100, "Warning on input %s/%s: %f\n", input->parent->name, input->name, *input->vallast);
+    if (settings.alertrepeat && (input->alert_last+settings.alertrepeat < now)) {
+      send_alert(msgbuf);
+      input->alert_last = now;
     }
   }
-  else if (input->alert >= ALERT_CRIT) {
-    if (input->crit_above && (*input->vallast > *input->crit_above)) {
-      snprintf(msgbuf, 100, "Critical on input %s: %f\n", input->name, *input->vallast);
-      if (settings.alertrepeat && (input->alert_last+settings.alertrepeat < now)) {
-        send_alert(msgbuf);
-        input->alert_last = now;
-      }
-    }
-    else if (input->crit_below && (*input->vallast < *input->crit_below)) {
-      snprintf(msgbuf, 100, "Critical on input %s: %f\n", input->name, *input->vallast);
-      if (settings.alertrepeat && (input->alert_last+settings.alertrepeat < now)) {
-        send_alert(msgbuf);
-        input->alert_last = now;
-      }
+  else if ((input->alert >= ALERT_CRIT) && ((input->crit_above && (*input->vallast > *input->crit_above)) || (input->crit_below && (*input->vallast < *input->crit_below)))) {
+    if (!input->parent) snprintf(msgbuf, 100, "Critical on input %s: %f\n", input->name, *input->vallast);
+    else snprintf(msgbuf, 100, "Critical on input %s/%s: %f\n", input->parent->name, input->name, *input->vallast);
+    if (settings.alertrepeat && (input->alert_last+settings.alertrepeat < now)) {
+      send_alert(msgbuf);
+      input->alert_last = now;
     }
   }
 

@@ -655,7 +655,7 @@ void send_alert(char *msg) {
       fprintf(stderr, "Failed to execute alert command\n");
       exit(EXIT_FAILURE);
     default: /* PARENT */
-      printf("Launched alert command with PID %d\n", c);
+      if (!settings.monitor) printf("Launched alert command with PID %d\n", c);
   }
 }
 
