@@ -36,7 +36,7 @@ void create_block(input_t *input) {
 
   box(win, 0, 0);
   wmove(win, 0, 2);
-  waddstr(win, "   ");
+  waddch(win, ' ');
   if (input->parent) wprintw(win, "%s : ", input->parent->name);
   wprintw(win, "%s ", input->name);
   mvwaddstr(win, 1, 2, "     Last ");
@@ -59,7 +59,7 @@ void arrange_blocks(void) {
   for (input = inputs; input; input = input->next) {
     if (!input->win) continue;
     input->winid = id++;
-    mvwaddch(input->win, 0, 3, input->winid);
+    mvwaddch(input->win, 1, 0, input->winid);
     if (x+13+(settings.nsummaries*7) > settings.ws.ws_col) {
       x = 0;
       y += 15;
