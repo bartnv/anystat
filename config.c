@@ -280,9 +280,14 @@ void process_setting(input_t *input, char *name, char *value) {
       settings.nsummaries = i;
       return;
     }
-    else if (!strcasecmp("alert-cmd", name) && value) {
-      printf("Configured alert command %s\n", value);
-      set(&settings.alertcmd, value);
+    else if (!strcasecmp("warn-cmd", name) && value) {
+      printf("Configured warn command %s\n", value);
+      set(&settings.warncmd, value);
+      return;
+    }
+    else if (!strcasecmp("crit-cmd", name) && value) {
+      printf("Configured crit command %s\n", value);
+      set(&settings.critcmd, value);
       return;
     }
     else if (!strcasecmp("alert-repeat", name) && value) {
@@ -552,16 +557,13 @@ void process_setting(input_t *input, char *name, char *value) {
     input->subtype = TYPE_AGGREGATE;
     return;
   }
-  else if (!strcasecmp("alert-on", name) && value) {
-    if (!strncasecmp("warn", value, 4)) {
-      input->alert = ALERT_WARN;
-      printf("Running alert-cmd for input %s on warning levels\n", input->name);
+  else if (!strcasecmp("alert-after", name) && value) {
+    c = strtol(value, &cp, 10);
+    if (cp != value) {
+      input->alert_after = c;
+      printf("Alerting after %d samples\n", c);
     }
-    else if (!strncasecmp("crit", value, 4)) {
-      input->alert = ALERT_CRIT;
-      printf("Running alert-cmd for input %s on critical levels\n", input->name);
-    }
-    else fprintf(stderr, "Invalid parameter in ALERT-ON setting: %s\n", value);
+    else fprintf(stderr, "Invalid parameter in ALERT-AFTER setting: %s\n", value);
     return;
   }
 
@@ -641,17 +643,27 @@ void start_pipe(input_t *input) {
   }
 }
 
-void send_alert(char *msg) {
+void send_alert(int type, char *msg) {
   int c;
   char *argv[3];
+
+  if ((type == ALERT_WARN) && !settings.warncmd) {
+    fprintf(stderr, "Alert of level WARN but no warn-cmd configured\n");
+    return;
+  }
+  else if ((type == ALERT_CRIT) && !settings.critcmd) {
+    fprintf(stderr, "Alert of level CRIT but no crit-cmd configured\n");
+    return;
+  }
 
   switch ((c = fork())) {
     case -1: fprintf(stderr, "Failed to fork alert command\n"); break;
     case 0: /* CHILD */
-      argv[0] = settings.alertcmd;
+      if (type == ALERT_WARN) argv[0] = settings.warncmd;
+      else argv[0] = settings.critcmd;
       argv[1] = msg;
       argv[2] = NULL;
-      execve(settings.alertcmd, argv, NULL);
+      execve(argv[0], argv, NULL);
       fprintf(stderr, "Failed to execute alert command\n");
       exit(EXIT_FAILURE);
     default: /* PARENT */

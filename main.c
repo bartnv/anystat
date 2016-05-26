@@ -340,6 +340,7 @@ int main(int argc, char *argv[]) {
               start = end+1;
             }
             offset = strlen(start);
+            if (offset) memmove(mainbuf, start, offset+1);
           }
           if ((c == 0) || done) { // Either the process closed the pipe or we are done with it
             close(input->cmd->fds[0]);
@@ -374,8 +375,8 @@ int main(int argc, char *argv[]) {
           else {
             if (errno == EAGAIN) { // Nothing left to read currently
               if (offset) { // Something not newline-terminated was left in the buffer
-                input->buffer = (char *)malloc(strlen(start)+1);
-                strcpy(input->buffer, start);
+                input->buffer = (char *)malloc(offset+1);
+                strcpy(input->buffer, mainbuf);
               }
             }
             else {
@@ -586,7 +587,7 @@ void do_namepos(input_t *input, char *name, char *value) {
     if (input->delta) newchild->delta = input->delta;
     if (input->consol) newchild->consol = input->consol;
     if (input->rate) newchild->rate = input->rate;
-    if (input->alert) newchild->alert = input->alert;
+    if (input->alert_after) newchild->alert_after = input->alert_after;
     if (input->scale_min) {
       newchild->scale_min = (float *)malloc(sizeof(float));
       *newchild->scale_min = *input->scale_min;
@@ -719,6 +720,7 @@ int parse_line(input_t *input, char *line) {
           return 0;
         }
       }
+      else tok = NULL;
     }
     else {
       if (!(tok = gettok(line, input->namex, ' '))) {
@@ -835,21 +837,36 @@ void process(input_t *input, float fl) {
   if (settings.monitor) update_block(input);
   else display(input);
 
-  if ((input->alert >= ALERT_WARN) && ((input->warn_above && (*input->vallast > *input->warn_above)) || (input->warn_below && (*input->vallast < *input->warn_below)))) {
-    if (!input->parent) snprintf(msgbuf, 100, "Warning on input %s: %f\n", input->name, *input->vallast);
-    else snprintf(msgbuf, 100, "Warning on input %s/%s: %f\n", input->parent->name, input->name, *input->vallast);
-    if (settings.alertrepeat && (input->alert_last+settings.alertrepeat < now)) {
-      send_alert(msgbuf);
-      input->alert_last = now;
+  if (input->alert_after) {
+    if (((input->crit_above && (*input->vallast > *input->crit_above)) || (input->crit_below && (*input->vallast < *input->crit_below))) && (++input->alert_hold >= input->alert_after)) {
+      if (!input->parent) {
+        if (input->alert_after > 1) snprintf(msgbuf, 100, "Critical on input %s after %d samples: %f\n", input->name, *input->vallast, input->alert_after);
+        else snprintf(msgbuf, 100, "Critical on input %s: %f\n", input->name, *input->vallast);
+      }
+      else {
+        if (input->alert_after > 1) snprintf(msgbuf, 100, "Critical on input %s/%s after %d samples: %f\n", input->parent->name, input->name, *input->vallast, input->alert_after);
+        else snprintf(msgbuf, 100, "Critical on input %s/%s: %f\n", input->parent->name, input->name, *input->vallast);
+      }
+      if (settings.alertrepeat && (input->alert_crit+settings.alertrepeat < now)) {
+        send_alert(ALERT_CRIT, msgbuf);
+        input->alert_crit = now;
+      }
     }
-  }
-  else if ((input->alert >= ALERT_CRIT) && ((input->crit_above && (*input->vallast > *input->crit_above)) || (input->crit_below && (*input->vallast < *input->crit_below)))) {
-    if (!input->parent) snprintf(msgbuf, 100, "Critical on input %s: %f\n", input->name, *input->vallast);
-    else snprintf(msgbuf, 100, "Critical on input %s/%s: %f\n", input->parent->name, input->name, *input->vallast);
-    if (settings.alertrepeat && (input->alert_last+settings.alertrepeat < now)) {
-      send_alert(msgbuf);
-      input->alert_last = now;
+    else if (((input->warn_above && (*input->vallast > *input->warn_above)) || (input->warn_below && (*input->vallast < *input->warn_below))) && (++input->alert_hold >= input->alert_after)) {
+      if (!input->parent) {
+        if (input->alert_after > 1) snprintf(msgbuf, 100, "Warning on input %s after %d samples: %f\n", input->name, *input->vallast, input->alert_after);
+        else snprintf(msgbuf, 100, "Warning on input %s: %f\n", input->name, *input->vallast);
+      }
+      else {
+        if (input->alert_after > 1) snprintf(msgbuf, 100, "Warning on input %s/%s after %d samples: %f\n", input->parent->name, input->name, *input->vallast, input->alert_after);
+        else snprintf(msgbuf, 100, "Warning on input %s/%s: %f\n", input->parent->name, input->name, *input->vallast);
+      }
+      if (settings.alertrepeat && (input->alert_warn+settings.alertrepeat < now)) {
+        send_alert(ALERT_WARN, msgbuf);
+        input->alert_warn = now;
+      }
     }
+    else input->alert_hold = 0;
   }
 
   if (settings.logdir) write_log(input, fl);

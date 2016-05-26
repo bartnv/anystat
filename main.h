@@ -57,8 +57,10 @@ typedef struct input_t {
   float *warn_below;
   float *crit_above;
   float *crit_below;
-  int alert;
-  int alert_last;
+  int alert_warn;
+  int alert_crit;
+  int alert_after;
+  int alert_hold;
   pcre *pcre;
   int delta;
   int time;
@@ -91,6 +93,8 @@ typedef struct input_t {
   int sqlid;
   FILE *logfp;
   WINDOW *win;
+  char winid;
+  int winhide;
 } input_t;
 
 typedef struct {
@@ -114,7 +118,8 @@ struct {
   char *sqlite;
   int summaries[SUMMARIES_MAX];
   int nsummaries;
-  char *alertcmd;
+  char *warncmd;
+  char *critcmd;
   int alertrepeat;
 } settings;
 

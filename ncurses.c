@@ -53,11 +53,13 @@ void create_block(input_t *input) {
   for (i = 0; i < settings.nsummaries; i++) waddstr(win, "|      ");
 }
 void arrange_blocks(void) {
-  int x = 0, y = 0;
+  int x = 0, y = 0, id = 65;
   input_t *input;
 
   for (input = inputs; input; input = input->next) {
     if (!input->win) continue;
+    input->winid = id++;
+    mvwaddch(input->win, 1, 0, input->winid);
     if (x+13+(settings.nsummaries*7) > settings.ws.ws_col) {
       x = 0;
       y += 15;
