@@ -441,11 +441,15 @@ void do_cat(input_t *input) {
   if (input->subtype & TYPE_NAMEVALPOS) input->update = now;  // type NAMEVALPOS doesn't set the parent update-time
 
   while (!done && fgets(mainbuf, MAIN_BUF_SIZE, fp)) done = parse_line(input, mainbuf);
+  if (input->skip) input->count -= input->skip;
 
   if (input->subtype & TYPE_COUNT) process(input, input->count);
   else if (input->subtype & TYPE_NAMECOUNT) {
     process(input, input->count);
-    for (input = input->next; input && input->parent; input = input->next) process(input, input->count);
+    for (input = input->next; input && input->parent; input = input->next) {
+      if (input->skip) input->count -= input->skip;
+      process(input, input->count);
+    }
   }
 
   if (input->consol && !(input->consol & CONSOL_FIRST)) report_consol(input);
