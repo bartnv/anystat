@@ -56,14 +56,22 @@ void arrange_blocks(void) {
   int x = 0, y = 0, id = 65;
   input_t *input;
 
+  clear();
+  refresh();
   for (input = inputs; input; input = input->next) {
     if (!input->win) continue;
     input->winid = id++;
-    mvwaddch(input->win, 1, 0, input->winid);
     if (x+13+(settings.nsummaries*7) > settings.ws.ws_col) {
       x = 0;
       y += 15;
     }
+    if (y+15 > settings.ws.ws_row) {
+      input->winhide = 1;
+      mvwin(input->win, 0, 0);
+      continue;
+    }
+    input->winhide = 0;
+    mvwaddch(input->win, 1, 0, input->winid);
     mvwin(input->win, y, x);
     wrefresh(input->win);
     x += 13+(settings.nsummaries*7);
@@ -77,6 +85,8 @@ void update_block(input_t *input) {
   int count, curts, prevts, mints;
   sqlite3_stmt *stmt;
   time_t now = time(NULL);
+
+  if (input->winhide) return;
 
   switch (input->valcnt) {
     default: mvwaddstr(input->win, 4, 7, format_float(input, input->roclast));
