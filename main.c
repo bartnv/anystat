@@ -1,5 +1,4 @@
 #define _GNU_SOURCE // Needed for versionsort()... makes this code unportable beyond Linux because I'm lazy
-//#define _X_OPEN_SOURCE_EXTENDED // Needed for wide-character use of ncurses
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -24,53 +23,39 @@
 #include <wait.h> // waitpid()
 #include <signal.h>
 #include <dirent.h> // scandir(), versionsort()
-#include <ncursesw/curses.h> // ncurses functions in ncurses.c and WINDOW declaration in main.h
 #include <locale.h> // setlocale()
 #include <sqlite3.h> // sqlite support (probably make this an IFDEF in the future to avoid always having this dependency)
 
-#define CONFIG_FILE "/etc/anystat.conf"
-
-#define MAIN_BUF_SIZE 4096
-#define VALUE_HIST_SIZE 100
-#define SUMMARIES_MAX 5		// Max number of summary-columns in monitoring mode
-
-#define CONFIG_REGEX_NAME "^\\s*([a-zA-Z0-9._-]+)\\s*:\\s*$"
-#define CONFIG_REGEX_SETTING "^\\s*([a-zA-Z-]+)\\s+(?:\"(.*?)\"|'(.*?)'|(.*?))\\s*$"
-
-#define MIN_INTERVAL 10
-#define DEF_INTERVAL 60
-
-#define INPUT_CAT      1	// Periodically read file
-#define INPUT_TAIL     2	// Continuously read file
-#define INPUT_CMD      4	// Periodically read command output
-#define INPUT_PIPE     8	// Continuously read command output
-#define INPUT_FIFO    16	// Continuously read fifo
-#define INPUT_LISTEN  32	// Bind to port and read data
-#define INPUT_CONNECT 64	// Connect to port and read data
-
-#define TYPE_COUNT               1	// Count output lines;
-#define TYPE_VALPOS              2	// Read value from word x on each line
-#define TYPE_LINEVALPOS          4	// Read value from word x on line y
-#define TYPE_NAMECOUNT           8	// Count output lines grouped by name
-#define TYPE_NAMEVALPOS         16	// Read value from word x on each line; group by name read from word y
-#define TYPE_TIME		32	// For periodic inputs: record the time taken to complete the operation
-					// For continuous inputs: record the time between output lines
-#define TYPE_AGGREGATE		64	// Read uplink output from another anystat value; reads values prefixed
-					//  with one or more levels of hierarchy names
-
-#define CONSOL_FIRST		 1
-#define CONSOL_LAST		 2
-#define CONSOL_MIN		 4
-#define CONSOL_MAX		 8
-#define CONSOL_SUM		16
-#define CONSOL_AVG		32
-
-#define ALERT_WARN		 1
-#define ALERT_CRIT		 2
-
 #include "main.h"
-#include "ncurses.c"
 #include "config.c"
+
+void do_cat(input_t *);
+void do_tail(input_t *);
+void do_tail_fp(input_t *, FILE *, int);
+void do_namepos(input_t *, char *, char *);
+void do_pipe(input_t *);
+int parse_line(input_t *, char *);
+void parse_value(input_t *, char *);
+void consolidate(input_t *, float);
+void process(input_t *, float);
+void report_consol(input_t *);
+void display(input_t *);
+void start_watches(void);
+void start_pipes(void);
+void start_pipe(input_t *);
+void start_tails(void);
+void start_cmd(input_t *);
+void open_fifos(void);
+void open_sockets(void);
+void set(char **, char *);
+void write_log(input_t *, float);
+void send_alert(int, char *);
+char *gettok(char *, int, char);
+char *itodur(int);
+char *itoa(int);
+void sig_winch(int);
+void do_exit(int);
+void uplink_connect(void);
 
 int main(int argc, char *argv[]) {
   struct timeval tv;
@@ -84,7 +69,7 @@ int main(int argc, char *argv[]) {
 
   signal(SIGCHLD, SIG_IGN);
   signal(SIGPIPE, SIG_IGN);
-  signal(SIGWINCH, sig_winch);
+  signal(SIGWINCH, SIG_IGN);
   signal(SIGINT, do_exit);
   signal(SIGTERM, do_exit);
 
@@ -98,18 +83,12 @@ int main(int argc, char *argv[]) {
   }
   if (fcntl(inot, F_SETFL, O_NONBLOCK) == -1) {
     perror("fcntl()");
-    exit(-1);
+    exit(EXIT_FAILURE);
   }
 
   now = time(NULL);
 
-  if (argc > 1) {
-    if (!strcmp(argv[1], "-m")) {
-      settings.monitor = 1;
-      if (argc > 2) read_config(argv[2]);
-    }
-    else read_config(argv[1]);
-  }
+  if (argc > 1) read_config(argv[1]);
   else read_config(NULL);
   if (settings.logdir && chdir(settings.logdir)) {
     fprintf(stderr, "Failed to change to log directory '%s': %s (logging disabled)\n", settings.logdir, strerror(errno));
@@ -122,14 +101,14 @@ int main(int argc, char *argv[]) {
     sqlite3_stmt *stmt;
 
     if ((c = sqlite3_open(settings.sqlite, &db))) {
-      fprintf(stderr, "Failed to open sqlite database '%s': %s (logging disabled)\n", settings.sqlite, sqlite3_errmsg(db));
-      return EXIT_FAILURE;
+      fprintf(stderr, "Failed to open sqlite database '%s': %s\n", settings.sqlite, sqlite3_errmsg(db));
+      exit(EXIT_FAILURE);
     }
     printf("Opened SQLite database %s\n", settings.sqlite);
     sqlite3_prepare_v2(db, "SELECT `id`, `name`, `sub` FROM inputs", 39, &stmt, NULL);
     if (!stmt) {
       fprintf(stderr, "Failed to prepare query for inputs on SQLite db: %s\n", sqlite3_errmsg(db));
-      return EXIT_FAILURE;
+      exit(EXIT_FAILURE);
     }
     while ((c = sqlite3_step(stmt)) == SQLITE_ROW) {
       if (sqlite3_column_count(stmt) != 3) break;
@@ -171,13 +150,6 @@ int main(int argc, char *argv[]) {
   open_sockets();
 
   fflush(stdout);
-
-  ioctl(0, TIOCGWINSZ, &settings.ws);
-
-  if (settings.monitor) {
-    printf("Monitoring mode selected; starting ncurses...\n");
-    go_ncurses();
-  }
 
   while (1) {
     maxsleep = 60;
@@ -260,17 +232,8 @@ int main(int argc, char *argv[]) {
 
     if (c == -1) {
       if (errno == EINTR) {
-        if (settings.winch) {
-          ioctl(0, TIOCGWINSZ, &settings.ws);
-          refresh();
-          resizeterm(settings.ws.ws_row, settings.ws.ws_col);
-          if (settings.monitor) arrange_blocks();
-          settings.winch = 0;
-        }
-        else {
-          if (!settings.monitor) printf("select() interrupted\n");
-          sleep(1);
-        }
+        printf("select() interrupted\n");
+        sleep(1);
         continue;
       }
       exit(-5);
@@ -284,7 +247,7 @@ int main(int argc, char *argv[]) {
                 if (stat(input->tail->filename, &statbuf) != -1) {
                   if (statbuf.st_size == 0) {
                     rewind(input->tail->fp);
-                    if (!settings.monitor) printf("Input file for %s has been truncated\n", input->name);
+                    printf("Input file for %s has been truncated\n", input->name);
                   }
                   else if (statbuf.st_size > input->tail->size) {
                     do_tail(input);
@@ -293,12 +256,12 @@ int main(int argc, char *argv[]) {
                   else if (statbuf.st_size < input->tail->size) {
                     rewind(input->tail->fp);
                     do_tail(input);
-                    if (!settings.monitor) printf("Input file for %s has shrunk %d bytes\n", input->name, input->tail->size-statbuf.st_size);
+                    printf("Input file for %s has shrunk %d bytes\n", input->name, input->tail->size-statbuf.st_size);
                   }
                   else if (statbuf.st_size == input->tail->size) {
                     rewind(input->tail->fp);
                     do_tail(input);
-                    if (!settings.monitor) printf("Input file for %s has been modified, but has not changed size\n", input->name);
+                    printf("Input file for %s has been modified, but has not changed size\n", input->name);
                   }
                   input->tail->size = statbuf.st_size;
                 }
@@ -306,16 +269,16 @@ int main(int argc, char *argv[]) {
               }
               if (ievent.mask & IN_MOVE_SELF) {
                 input->tail->reopen = 1;
-                if (!settings.monitor) printf("Input file for %s has been moved\n", input->name);
+                printf("Input file for %s has been moved\n", input->name);
               }
               if (ievent.mask & IN_DELETE_SELF) {
                 input->tail->reopen = 2;
-                if (!settings.monitor) printf("Input file for %s has been deleted\n", input->name);
+                printf("Input file for %s has been deleted\n", input->name);
               }
               break;
             }
           }
-          if (!input && !settings.monitor) fprintf(stderr, "No input found matching inotify event\n");
+          if (!input) fprintf(stderr, "No input found matching inotify event\n");
         }
       }
       for (input = inputs; input; input = input->next) {
@@ -419,7 +382,7 @@ int main(int argc, char *argv[]) {
             }
           }
           else {
-            if (!settings.monitor) printf("Input %s closed pipe unexpectedly\n", input->name);
+            printf("Input %s closed pipe unexpectedly\n", input->name);
           }
         }
       }
@@ -473,7 +436,7 @@ void do_tail(input_t *input) {
     if ((r = stat(input->tail->filename, &statbuf)) != -1) {
       if (statbuf.st_size == 0) {
         rewind(input->tail->fp);
-        if (!settings.monitor) printf("Input file for %s has been truncated\n", input->name);
+        printf("Input file for %s has been truncated\n", input->name);
       }
       else if (statbuf.st_size < input->tail->size) {
         rewind(input->tail->fp);
@@ -488,7 +451,7 @@ void do_tail(input_t *input) {
 
   if (input->tail->reopen) {
     if (!input->tail->fpnew) {
-      if (!settings.monitor) printf("Trying to open new input file after move/delete\n");
+      printf("Trying to open new input file after move/delete\n");
       if (!(input->tail->fpnew = fopen(input->tail->filename, "r"))) {
         input->tail->fpnew = 0;
         perror("Failed to open new input file after move/delete");
@@ -511,7 +474,7 @@ void do_tail(input_t *input) {
     }
     else {
       if (!input->count) {
-        if (!settings.monitor) printf("No lines were added to old input file in one cycle, closing...\n");
+        printf("No lines were added to old input file in one cycle, closing...\n");
         fclose(input->tail->fp);
         input->tail->fp = input->tail->fpnew;
         input->tail->fpnew = 0;
@@ -637,16 +600,11 @@ void do_namepos(input_t *input, char *name, char *value) {
         }
         else {
           newchild->sqlid = sqlite3_last_insert_rowid(db);
-          if (!settings.monitor) printf("Added new input %s to SQLite db with id %d\n", newchild->name, newchild->sqlid);
+          printf("Added new input %s to SQLite db with id %d\n", newchild->name, newchild->sqlid);
         }
       }
     }
-
-    if (settings.monitor) {
-      create_block(newchild);
-      arrange_blocks();
-    }
-    else printf("Input %s: created new child %s\n", input->name, child->next->name);
+    printf("Input %s: created new child %s\n", input->name, child->next->name);
   }
   if (value) parse_value(child->next, value); // subtype is TYPE_NAMEVALPOS
   else child->next->count++;  // subtype is TYPE_NAMECOUNT
@@ -834,8 +792,7 @@ void process(input_t *input, float fl) {
     }
   }
 
-  if (settings.monitor) update_block(input);
-  else display(input);
+  display(input);
 
   if (input->alert_after) {
     if (((input->crit_above && (*input->vallast > *input->crit_above)) || (input->crit_below && (*input->vallast < *input->crit_below))) && (++input->alert_hold >= input->alert_after)) {
@@ -981,6 +938,141 @@ void display(input_t *input) {
   }
 }
 
+void start_tails(void) {
+  int c;
+  input_t *input;
+  struct stat statbuf;
+
+  for (input = inputs; input; input = input->next) {
+    if (input->type & INPUT_TAIL) {
+      if (!(input->tail->fp = fopen(input->tail->filename, "r"))) {
+        fprintf(stderr, "Input %s: failed to open input file %s: %m\n", input->name, input->tail->filename);
+        exit(-1);
+      }
+      fseek(input->tail->fp, 0, SEEK_END);
+      if (fstat(fileno(input->tail->fp), &statbuf) == -1) {
+        perror("Failed to stat input file");
+        exit(-1);
+      }
+      input->tail->size = statbuf.st_size;
+      if (fcntl(fileno(input->tail->fp), F_SETFL, O_NONBLOCK) == -1) {
+        perror("fcntl()");
+        exit(-1);
+      }
+      if (input->subtype & (TYPE_COUNT|TYPE_NAMECOUNT)) input->tail->watch = inotify_add_watch(inot, input->tail->filename, IN_DELETE_SELF|IN_MOVE_SELF);
+      else input->tail->watch = inotify_add_watch(inot, input->tail->filename, IN_MODIFY|IN_DELETE_SELF|IN_MOVE_SELF);
+      if (input->tail->watch < 0) {
+        perror("inotify_add_watch()");
+        exit(-1);
+      }
+      input->update = now;
+    }
+  }
+}
+
+void start_pipes(void) {
+  input_t *input;
+
+  for (input = inputs; input; input = input->next) {
+    if (input->type & INPUT_PIPE) start_pipe(input);
+  }
+}
+
+void start_pipe(input_t *input) {
+  int c;
+  char *argv[4];
+
+  if (input->pipe->fds[0]) {
+    if (close(input->pipe->fds[0])) perror("close()");
+  }
+  if (pipe(input->pipe->fds)) {  // the main process stdin must never be closed, otherwise the first of these pipe file descriptors
+    perror("pipe()");            //  may be "0", causing the if (input->pipe->fds[0]) test elsewhere to fail unexpectedly
+    exit(-2);
+  }
+  fcntl(input->pipe->fds[0], F_SETFL, O_NONBLOCK);
+  switch ((c = fork())) {
+    case -1: exit(-3);
+    case 0:  /* CHILD */
+      if (close(input->pipe->fds[0])) perror("close()");
+      dup2(input->pipe->fds[1], STDOUT_FILENO);
+      argv[0] = "/bin/sh";
+      argv[1] = "-c";
+      argv[2] = input->pipe->cmd;
+      argv[3] = NULL;
+      execve("/bin/sh", argv, NULL);
+      exit(-4);
+    default: /* PARENT */
+      if (close(input->pipe->fds[1])) perror("close()");
+      input->pipe->pid = c;
+      printf("Pipe input %s launched succesfully with PID %d\n", input->name, input->pipe->pid);
+//      input->pipe->fp = fdopen(input->pipe->fds[0], "r");
+//      setlinebuf(input->pipe->fp);
+  }
+}
+
+void send_alert(int type, char *msg) {
+  int c;
+  char *argv[3];
+
+  if ((type == ALERT_WARN) && !settings.warncmd) {
+    fprintf(stderr, "Alert of level WARN but no warn-cmd configured\n");
+    return;
+  }
+  else if ((type == ALERT_CRIT) && !settings.critcmd) {
+    fprintf(stderr, "Alert of level CRIT but no crit-cmd configured\n");
+    return;
+  }
+
+  switch ((c = fork())) {
+    case -1: fprintf(stderr, "Failed to fork alert command\n"); break;
+    case 0: /* CHILD */
+      if (type == ALERT_WARN) argv[0] = settings.warncmd;
+      else argv[0] = settings.critcmd;
+      argv[1] = msg;
+      argv[2] = NULL;
+      execve(argv[0], argv, NULL);
+      fprintf(stderr, "Failed to execute alert command\n");
+      exit(EXIT_FAILURE);
+    default: /* PARENT */
+      printf("Launched alert command with PID %d\n", c);
+  }
+}
+
+void start_cmd(input_t *input) {
+  int c;
+  char *argv[4];
+
+  if (input->cmd->fds[0]) {
+    if (close(input->cmd->fds[0])) perror("close()");
+  }
+  if (pipe(input->cmd->fds)) {
+    perror("pipe()");
+    exit(-2);
+  }
+  fcntl(input->cmd->fds[0], F_SETFL, O_NONBLOCK);
+  switch ((c = fork())) {
+    case -1: exit(-3);
+    case 0:  /* CHILD */
+      if (close(input->cmd->fds[0])) perror("close()");
+      dup2(input->cmd->fds[1], STDOUT_FILENO);
+      argv[0] = "/bin/sh";
+      argv[1] = "-c";
+      argv[2] = input->cmd->cmd;
+      argv[3] = NULL;
+      execve("/bin/sh", argv, NULL);
+      exit(-4);
+    default: /* PARENT */
+      if (input->time) gettimeofday(&input->tv, NULL);
+      if (close(input->cmd->fds[1])) perror("close()");
+      input->cmd->pid = c;
+//      printf("CMD input %s launched succesfully with PID %d\n", input->name, input->cmd->pid);
+  }
+}
+
+void open_fifos(void) { }
+
+void open_sockets(void) { }
+
 void write_log(input_t *input, float fl) {
   int r, n;
   char *filename = NULL;
@@ -1024,7 +1116,7 @@ void write_log(input_t *input, float fl) {
       filename = NULL;
     }
     else {
-      if (!settings.monitor) printf("Reusing logfile %s for input %s\n", filename, input->name);
+      printf("Reusing logfile %s for input %s\n", filename, input->name);
       if (stat(filename, &statbuf)) {
         fprintf(stderr, "Failed to stat() logfile %s for %s: %s (skipping write)\n", filename, input->name, strerror(errno));
         while (--r) free(namelist[r]);
@@ -1048,7 +1140,7 @@ void write_log(input_t *input, float fl) {
         filename = (char *)malloc(strlen(input->name)+16);
         sprintf(filename, "%s.%d.log", input->name, now);
       }
-      if (!settings.monitor) printf("Creating logfile %s for input %s\n", filename, input->name);
+      printf("Creating logfile %s for input %s\n", filename, input->name);
     }
 
     if (!(input->logfp = fopen(filename, "a"))) {
@@ -1092,55 +1184,7 @@ char *gettok(char *str, int n, char delim) {
   return tok;
 }
 
-char *itoa(int digits) {
-   static char buf[11];
-   char *ptr = buf;
-   int r, c = 1;
-
-   while (digits/c > 9) c *= 10;
-   do {
-      r = digits/c;
-      *ptr++ = r+48;
-      digits -= r*c;
-      c /= 10;
-   } while (c);
-   *ptr = 0;
-   return buf;
-}
-
-char *itodur(int digits) {
-   static char buf[9];
-   static int delta[] = { 31449600, 604800, 86400, 3600, 60, 1 };
-   static char unit[] = "ywdhms";
-   int c, r;
-   char *ptr;
-
-   memset(buf, 0, 9);
-
-   if (!digits) {
-      strcpy(buf, "0s");
-      return buf;
-   }
-
-   for (c = 0; digits < delta[c]; c++);
-   strcpy(buf, itoa(digits/delta[c]));
-   ptr = strchr(buf, '\0');
-   *ptr = unit[c];
-   if ((r = digits%delta[c])) {
-      *++ptr = ' ';
-      strcat(buf, itoa(r/delta[++c]));
-      ptr = strchr(buf, '\0');
-      *ptr = unit[c];
-   }
-   return buf;
-}
-
-void sig_winch(int sig) {
-  settings.winch = 1;
-}
-
 void do_exit(int sig) {
-  if (settings.monitor) exit_ncurses();
   printf("Received signal %d, exiting...\n", sig);
   exit(0);
 }

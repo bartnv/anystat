@@ -1,11 +1,8 @@
 void read_config(char *);
 void process_setting(input_t *, char *, char *);
-void start_watches(void);
-void start_pipes(void);
-void start_pipe(input_t *);
-void open_fifos(void);
-void open_sockets(void);
 void set(char **, char *);
+char *itoa(int);
+char *itodur(int);
 
 void read_config(char *config) {
   char *errorp, *name, *setting;
@@ -571,140 +568,48 @@ void process_setting(input_t *input, char *name, char *value) {
   else fprintf(stderr, "Unrecognised setting for %s: %s %s\n", input->name, name, value);
 }
 
-void start_tails(void) {
-  int c;
-  input_t *input;
-  struct stat statbuf;
+char *itoa(int digits) {
+   static char buf[11];
+   char *ptr = buf;
+   int r, c = 1;
 
-  for (input = inputs; input; input = input->next) {
-    if (input->type & INPUT_TAIL) {
-      if (!(input->tail->fp = fopen(input->tail->filename, "r"))) {
-        fprintf(stderr, "Input %s: failed to open input file %s: %m\n", input->name, input->tail->filename);
-        exit(-1);
-      }
-      fseek(input->tail->fp, 0, SEEK_END);
-      if (fstat(fileno(input->tail->fp), &statbuf) == -1) {
-        perror("Failed to stat input file");
-        exit(-1);
-      }
-      input->tail->size = statbuf.st_size;
-      if (fcntl(fileno(input->tail->fp), F_SETFL, O_NONBLOCK) == -1) {
-        perror("fcntl()");
-        exit(-1);
-      }
-      if (input->subtype & (TYPE_COUNT|TYPE_NAMECOUNT)) input->tail->watch = inotify_add_watch(inot, input->tail->filename, IN_DELETE_SELF|IN_MOVE_SELF);
-      else input->tail->watch = inotify_add_watch(inot, input->tail->filename, IN_MODIFY|IN_DELETE_SELF|IN_MOVE_SELF);
-      if (input->tail->watch < 0) {
-        perror("inotify_add_watch()");
-        exit(-1);
-      }
-      input->update = now;
-    }
-  }
+   while (digits/c > 9) c *= 10;
+   do {
+      r = digits/c;
+      *ptr++ = r+48;
+      digits -= r*c;
+      c /= 10;
+   } while (c);
+   *ptr = 0;
+   return buf;
 }
 
-void start_pipes(void) {
-  input_t *input;
+char *itodur(int digits) {
+   static char buf[9];
+   static int delta[] = { 31449600, 604800, 86400, 3600, 60, 1 };
+   static char unit[] = "ywdhms";
+   int c, r;
+   char *ptr;
 
-  for (input = inputs; input; input = input->next) {
-    if (input->type & INPUT_PIPE) start_pipe(input);
-  }
+   memset(buf, 0, 9);
+
+   if (!digits) {
+      strcpy(buf, "0s");
+      return buf;
+   }
+
+   for (c = 0; digits < delta[c]; c++);
+   strcpy(buf, itoa(digits/delta[c]));
+   ptr = strchr(buf, '\0');
+   *ptr = unit[c];
+   if ((r = digits%delta[c])) {
+      *++ptr = ' ';
+      strcat(buf, itoa(r/delta[++c]));
+      ptr = strchr(buf, '\0');
+      *ptr = unit[c];
+   }
+   return buf;
 }
-
-void start_pipe(input_t *input) {
-  int c;
-  char *argv[4];
-
-  if (input->pipe->fds[0]) {
-    if (close(input->pipe->fds[0])) perror("close()");
-  }
-  if (pipe(input->pipe->fds)) {  // the main process stdin must never be closed, otherwise the first of these pipe file descriptors
-    perror("pipe()");            //  may be "0", causing the if (input->pipe->fds[0]) test elsewhere to fail unexpectedly
-    exit(-2);
-  }
-  fcntl(input->pipe->fds[0], F_SETFL, O_NONBLOCK);
-  switch ((c = fork())) {
-    case -1: exit(-3);
-    case 0:  /* CHILD */
-      if (close(input->pipe->fds[0])) perror("close()");
-      dup2(input->pipe->fds[1], STDOUT_FILENO);
-      argv[0] = "/bin/sh";
-      argv[1] = "-c";
-      argv[2] = input->pipe->cmd;
-      argv[3] = NULL;
-      execve("/bin/sh", argv, NULL);
-      exit(-4);
-    default: /* PARENT */
-      if (close(input->pipe->fds[1])) perror("close()");
-      input->pipe->pid = c;
-      printf("Pipe input %s launched succesfully with PID %d\n", input->name, input->pipe->pid);
-//      input->pipe->fp = fdopen(input->pipe->fds[0], "r");
-//      setlinebuf(input->pipe->fp);
-  }
-}
-
-void send_alert(int type, char *msg) {
-  int c;
-  char *argv[3];
-
-  if ((type == ALERT_WARN) && !settings.warncmd) {
-    fprintf(stderr, "Alert of level WARN but no warn-cmd configured\n");
-    return;
-  }
-  else if ((type == ALERT_CRIT) && !settings.critcmd) {
-    fprintf(stderr, "Alert of level CRIT but no crit-cmd configured\n");
-    return;
-  }
-
-  switch ((c = fork())) {
-    case -1: fprintf(stderr, "Failed to fork alert command\n"); break;
-    case 0: /* CHILD */
-      if (type == ALERT_WARN) argv[0] = settings.warncmd;
-      else argv[0] = settings.critcmd;
-      argv[1] = msg;
-      argv[2] = NULL;
-      execve(argv[0], argv, NULL);
-      fprintf(stderr, "Failed to execute alert command\n");
-      exit(EXIT_FAILURE);
-    default: /* PARENT */
-      if (!settings.monitor) printf("Launched alert command with PID %d\n", c);
-  }
-}
-
-void start_cmd(input_t *input) {
-  int c;
-  char *argv[4];
-
-  if (input->cmd->fds[0]) {
-    if (close(input->cmd->fds[0])) perror("close()");
-  }
-  if (pipe(input->cmd->fds)) {
-    perror("pipe()");
-    exit(-2);
-  }
-  fcntl(input->cmd->fds[0], F_SETFL, O_NONBLOCK);
-  switch ((c = fork())) {
-    case -1: exit(-3);
-    case 0:  /* CHILD */
-      if (close(input->cmd->fds[0])) perror("close()");
-      dup2(input->cmd->fds[1], STDOUT_FILENO);
-      argv[0] = "/bin/sh";
-      argv[1] = "-c";
-      argv[2] = input->cmd->cmd;
-      argv[3] = NULL;
-      execve("/bin/sh", argv, NULL);
-      exit(-4);
-    default: /* PARENT */
-      if (input->time) gettimeofday(&input->tv, NULL);
-      if (close(input->cmd->fds[1])) perror("close()");
-      input->cmd->pid = c;
-//      printf("CMD input %s launched succesfully with PID %d\n", input->name, input->cmd->pid);
-  }
-}
-
-void open_fifos(void) { }
-
-void open_sockets(void) { }
 
 void set(char **dst, char *val) {
    if (*dst != NULL) free(*dst);

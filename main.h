@@ -1,3 +1,43 @@
+#define CONFIG_FILE "/etc/anystat.conf"
+#define VALUE_HIST_SIZE 100
+#define SUMMARIES_MAX 5		// Max number of summary-columns in monitoring mode
+
+#define CONFIG_REGEX_NAME "^\\s*([a-zA-Z0-9._-]+)\\s*:\\s*$"
+#define CONFIG_REGEX_SETTING "^\\s*([a-zA-Z-]+)\\s+(?:\"(.*?)\"|'(.*?)'|(.*?))\\s*$"
+
+#define MAIN_BUF_SIZE 4096
+#define MIN_INTERVAL 10
+#define DEF_INTERVAL 60
+
+#define INPUT_CAT      1	// Periodically read file
+#define INPUT_TAIL     2	// Continuously read file
+#define INPUT_CMD      4	// Periodically read command output
+#define INPUT_PIPE     8	// Continuously read command output
+#define INPUT_FIFO    16	// Continuously read fifo
+#define INPUT_LISTEN  32	// Bind to port and read data
+#define INPUT_CONNECT 64	// Connect to port and read data
+
+#define TYPE_COUNT               1	// Count output lines;
+#define TYPE_VALPOS              2	// Read value from word x on each line
+#define TYPE_LINEVALPOS          4	// Read value from word x on line y
+#define TYPE_NAMECOUNT           8	// Count output lines grouped by name
+#define TYPE_NAMEVALPOS         16	// Read value from word x on each line; group by name read from word y
+#define TYPE_TIME		32	// For periodic inputs: record the time taken to complete the operation
+					// For continuous inputs: record the time between output lines
+#define TYPE_AGGREGATE		64	// Read uplink output from another anystat value; reads values prefixed
+					//  with one or more levels of hierarchy names
+
+#define CONSOL_FIRST		 1
+#define CONSOL_LAST		 2
+#define CONSOL_MIN		 4
+#define CONSOL_MAX		 8
+#define CONSOL_SUM		16
+#define CONSOL_AVG		32
+
+#define ALERT_WARN		 1
+#define ALERT_CRIT		 2
+
+
 typedef struct input_cat {
   char *filename;
 } input_cat;
@@ -92,9 +132,11 @@ typedef struct input_t {
   char *buffer;
   int sqlid;
   FILE *logfp;
+#ifdef CURSES_H
   WINDOW *win;
   char winid;
   int winhide;
+#endif
 } input_t;
 
 typedef struct {
@@ -108,19 +150,18 @@ typedef struct {
 struct {
   char *logdir;
   int logsize;
-  int monitor;
-  int winch;
-  struct winsize ws;
   char *uplinkhost;
   int uplinkport;
   int uplinksock;
   char *uplinkprefix;
   char *sqlite;
-  int summaries[SUMMARIES_MAX];
-  int nsummaries;
   char *warncmd;
   char *critcmd;
   int alertrepeat;
+  int summaries[SUMMARIES_MAX];
+  int nsummaries;
+  int winch;
+  struct winsize ws;
 } settings;
 
 char *type[] = {
@@ -172,22 +213,3 @@ int inot;
 sqlite3 *db;
 
 char mainbuf[MAIN_BUF_SIZE+1];
-
-void do_cat(input_t *);
-void do_tail(input_t *);
-void do_tail_fp(input_t *, FILE *, int);
-void do_namepos(input_t *, char *, char *);
-void do_pipe(input_t *);
-int parse_line(input_t *, char *);
-void parse_value(input_t *, char *);
-void consolidate(input_t *, float);
-void process(input_t *, float);
-void report_consol(input_t *);
-void display(input_t *);
-void write_log(input_t *, float);
-char *gettok(char *, int, char);
-char *itodur(int);
-char *itoa(int);
-void sig_winch(int);
-void do_exit(int);
-void uplink_connect(void);

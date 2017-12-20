@@ -9,6 +9,10 @@ char *format_float(input_t *, float);
 void go_ncurses(void) {
   input_t *input;
 
+  // Some arcane stuff to make ncurses use UTF-8 everywhere
+  setlocale(LC_ALL, "");
+  setenv("NCURSES_NO_UTF8_ACS", "1", 0);
+
   initscr();
   curs_set(0);
   if (has_colors() == FALSE) {
@@ -88,57 +92,57 @@ void update_block(input_t *input) {
 
   if (input->winhide) return;
 
-  switch (input->valcnt) {
-    default: mvwaddstr(input->win, 4, 7, format_float(input, input->roclast));
-    case 2: mvwaddstr(input->win, 3, 7, format_float(input, input->amplast));
-    case 1:
+  // switch (input->valcnt) {
+  //   default: mvwaddstr(input->win, 4, 7, format_float(input, input->roclast));
+  //   case 2: mvwaddstr(input->win, 3, 7, format_float(input, input->amplast));
+  //   case 1:
       if (input->crit_above && (*input->vallast > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
       else if (input->warn_above && (*input->vallast > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
       else if (input->crit_below && (*input->vallast < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
       else if (input->warn_below && (*input->vallast < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
       mvwaddstr(input->win, 2, 7, format_float(input, *input->vallast));
       wattron(input->win, COLOR_PAIR(1));
-  }
+  // }
 
-  if (db) {
-    for (n = 0; n < settings.nsummaries; n++) {
-      if (input->valcnt%((n+1)*10)) continue;
-      min = FLT_MAX;
-      max = FLT_MIN;
-      mints = INT_MAX;
-      avg = valsum = devsum = rocsum = 0;
-      count = 0;
-
-      i = sprintf(query, "SELECT `value`, `ts` FROM `data` WHERE `input` = %d AND ts > %d", input->sqlid, now-settings.summaries[n]);
-      sqlite3_prepare_v2(db, query, i+1, &stmt, NULL);
-      if (!stmt) return;
-      while ((i = sqlite3_step(stmt)) == SQLITE_ROW) {
-        if (sqlite3_column_count(stmt) != 2) break;
-        cur = (float)sqlite3_column_double(stmt, 0);
-        curts = sqlite3_column_int(stmt, 1);
-        if (cur < min) min = cur;
-        if (cur > max) max = cur;
-        if (curts < mints) mints = curts;
-        if (count) rocsum += abs(cur-prev)/(curts-prevts);
-        prev = cur;
-        prevts = curts;
-        count++;
-        valsum += cur;
-        devsum += abs(cur-valsum/count);
-      }
-      sqlite3_finalize(stmt);
-      if (i != SQLITE_DONE) return;
-      if (count && (now-mints > settings.summaries[n]*0.5)) update_summary(input, 14+(n*7), count, valsum, devsum, rocsum, min, max);
-    }
-  }
-  else {
-    for (i = 0; i < input->valcnt && i < VALUE_HIST_SIZE; i++) {
-      if (input->valhist[i] < min) min = input->valhist[i];
-      if (input->valhist[i] > max) max = input->valhist[i];
-      valsum += input->valhist[i];
-    }
-    histcount = i+1;
-  }
+  // if (db) {
+  //   for (n = 0; n < settings.nsummaries; n++) {
+  //     if (input->valcnt%((n+1)*10)) continue;
+  //     min = FLT_MAX;
+  //     max = FLT_MIN;
+  //     mints = INT_MAX;
+  //     avg = valsum = devsum = rocsum = 0;
+  //     count = 0;
+  //
+  //     i = sprintf(query, "SELECT `value`, `ts` FROM `data` WHERE `input` = %d AND ts > %d", input->sqlid, now-settings.summaries[n]);
+  //     sqlite3_prepare_v2(db, query, i+1, &stmt, NULL);
+  //     if (!stmt) return;
+  //     while ((i = sqlite3_step(stmt)) == SQLITE_ROW) {
+  //       if (sqlite3_column_count(stmt) != 2) break;
+  //       cur = (float)sqlite3_column_double(stmt, 0);
+  //       curts = sqlite3_column_int(stmt, 1);
+  //       if (cur < min) min = cur;
+  //       if (cur > max) max = cur;
+  //       if (curts < mints) mints = curts;
+  //       if (count) rocsum += abs(cur-prev)/(curts-prevts);
+  //       prev = cur;
+  //       prevts = curts;
+  //       count++;
+  //       valsum += cur;
+  //       devsum += abs(cur-valsum/count);
+  //     }
+  //     sqlite3_finalize(stmt);
+  //     if (i != SQLITE_DONE) return;
+  //     if (count && (now-mints > settings.summaries[n]*0.5)) update_summary(input, 14+(n*7), count, valsum, devsum, rocsum, min, max);
+  //   }
+  // }
+  // else {
+  //   for (i = 0; i < input->valcnt && i < VALUE_HIST_SIZE; i++) {
+  //     if (input->valhist[i] < min) min = input->valhist[i];
+  //     if (input->valhist[i] > max) max = input->valhist[i];
+  //     valsum += input->valhist[i];
+  //   }
+  //   histcount = i+1;
+  // }
 
   update_plot(input);
   wrefresh(input->win);
