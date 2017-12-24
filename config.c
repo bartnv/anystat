@@ -25,6 +25,8 @@ void read_config(char *config) {
     fprintf(stderr, "Compilation error at position %d in config regex for setting: %s\n", offset, errorp);
   }
 
+  settings.skipexistlines = 1;
+
   while (fgets(mainbuf, MAIN_BUF_SIZE, fp)) {
     if (mainbuf[0] == '#') continue;
     else {

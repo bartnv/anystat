@@ -49,6 +49,7 @@ typedef struct input_tail {
   FILE *fpnew;
   int watch;
   int size;
+  int inode;
   int reopen; // 1 = original file was moved; 2 = original file was unlinked
 } input_tail;
 
@@ -162,6 +163,7 @@ struct {
   int nsummaries;
   int winch;
   struct winsize ws;
+  int skipexistlines;
 } settings;
 
 char *type[] = {

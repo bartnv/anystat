@@ -434,13 +434,20 @@ void do_tail(input_t *input) {
 
   if (!input->tail->reopen) {
     if ((r = stat(input->tail->filename, &statbuf)) != -1) {
-      if (statbuf.st_size == 0) {
+      if (statbuf.st_ino != input->tail->inode) {
+        fprintf(stderr, "Input file has changed inode; reopening...\n");
+        input->tail->reopen = 1;
+        input->tail->inode = statbuf.st_ino;
+      }
+      else if (statbuf.st_size == 0) {
         rewind(input->tail->fp);
-        printf("Input file for %s has been truncated\n", input->name);
+        fprintf(stderr, "Input file for %s has been truncated\n", input->name);
       }
       else if (statbuf.st_size < input->tail->size) {
         rewind(input->tail->fp);
-        printf("Input file for %s has shrunk %d bytes\n", input->name, input->tail->size-statbuf.st_size);
+//        fseek(input->tail->fp, 0, SEEK_END);
+//        input->tail->size = statbuf.st_size;
+        fprintf(stderr, "Input file for %s has shrunk %d bytes\n", input->name, input->tail->size-statbuf.st_size);
       }
       input->tail->size = statbuf.st_size;
     }
@@ -451,30 +458,28 @@ void do_tail(input_t *input) {
 
   if (input->tail->reopen) {
     if (!input->tail->fpnew) {
-      printf("Trying to open new input file after move/delete\n");
+      fprintf(stderr, "Trying to open new input file after move/delete\n");
       if (!(input->tail->fpnew = fopen(input->tail->filename, "r"))) {
         input->tail->fpnew = 0;
         perror("Failed to open new input file after move/delete");
       }
-      else {
-        if (fcntl(fileno(input->tail->fpnew), F_SETFL, O_NONBLOCK) == -1) {
-          fclose(input->tail->fpnew);
-          input->tail->fpnew = 0;
-          perror("fcntl failed to set O_NONBLOCK on new input file after move/delete");
-        }
-        else {
-          if ((input->tail->watch = inotify_add_watch(inot, input->tail->filename, IN_DELETE_SELF|IN_MOVE_SELF)) < 0) {
-            fclose(input->tail->fpnew);
-            input->tail->fpnew = 0;
-            fprintf(stderr, "Error adding inotify watch for input %s file %s: %m\n", input->name, input->tail->filename);
-          }
-          else do_tail_fp(input, input->tail->fpnew, 0);
-        }
+      else if (fcntl(fileno(input->tail->fpnew), F_SETFL, O_NONBLOCK) == -1) {
+        fclose(input->tail->fpnew);
+        input->tail->fpnew = 0;
+        perror("fcntl failed to set O_NONBLOCK on new input file after move/delete");
       }
+      else if ((input->tail->watch = inotify_add_watch(inot, input->tail->filename, IN_DELETE_SELF|IN_MOVE_SELF)) < 0) {
+        fclose(input->tail->fpnew);
+        input->tail->fpnew = 0;
+        fprintf(stderr, "Error adding inotify watch for input %s file %s: %m\n", input->name, input->tail->filename);
+      }
+      else if (settings.skipexistlines) fseek(input->tail->fpnew, 0, SEEK_END); // Skip lines already in the file when it was moved in place
+      else do_tail_fp(input, input->tail->fpnew, 0);
     }
     else {
       if (!input->count) {
-        printf("No lines were added to old input file in one cycle, closing...\n");
+        fprintf(stderr, "No lines were added to old input file in one cycle, closing...\n");
+        inotify_rm_watch(fileno(input->tail->fp), inot);
         fclose(input->tail->fp);
         input->tail->fp = input->tail->fpnew;
         input->tail->fpnew = 0;
