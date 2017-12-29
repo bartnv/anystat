@@ -1,5 +1,6 @@
 void read_config(char *);
 void process_setting(input_t *, char *, char *);
+input_t *add_input(char *, input_t *);
 void set(char **, char *);
 char *itoa(int);
 char *itodur(int);
@@ -33,19 +34,7 @@ void read_config(char *config) {
       if ((c = pcre_exec(rxname, NULL, mainbuf, strlen(mainbuf), 0, 0, matches, 30)) >= 0) {
         if (matches[3] > 0) {
           mainbuf[matches[3]] = '\0';
-          newinput = (input_t *)malloc(sizeof(input_t));
-          if (!newinput) {
-            fprintf(stderr, "Failed to allocate memory for input\n");
-            exit(-1);
-          }
-          memset(newinput, 0, sizeof(input_t));
-          set(&newinput->name, mainbuf+matches[2]);
-          if (inputs) {
-            for (input = inputs; input->next; input = input->next);
-            input->next = newinput;
-          }
-          else inputs = newinput;
-          newinput->vallast = newinput->valhist+VALUE_HIST_SIZE-1;
+          newinput = add_input(mainbuf+matches[2], NULL);
           printf("New input: %s\n", mainbuf+matches[2]);
         }
         else fprintf(stderr, "Config regex name succeeded but no submatch returned\n");
@@ -568,6 +557,30 @@ void process_setting(input_t *input, char *name, char *value) {
 
   if (!value) fprintf(stderr, "Unrecognised setting for %s: %s\n", input->name, name);
   else fprintf(stderr, "Unrecognised setting for %s: %s %s\n", input->name, name, value);
+}
+
+input_t *add_input(char *name, input_t *parent) {
+  input_t *input, *newinput = (input_t *)malloc(sizeof(input_t));
+  if (!newinput) {
+    fprintf(stderr, "Failed to allocate memory for input\n");
+    exit(EXIT_FAILURE);
+  }
+  memset(newinput, 0, sizeof(input_t));
+  set(&newinput->name, name);
+  if (inputs) {
+    if (parent) {
+      newinput->next = parent->next;
+      parent->next = newinput;
+    }
+    else {
+      for (input = inputs; input->next; input = input->next);
+      input->next = newinput;
+    }
+  }
+  else inputs = newinput;
+  newinput->parent = parent;
+  newinput->vallast = newinput->valhist+VALUE_HIST_SIZE-1;
+  return newinput;
 }
 
 char *itoa(int digits) {
