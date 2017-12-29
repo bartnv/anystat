@@ -1,7 +1,7 @@
 void create_block(input_t *);
 void arrange_blocks(void);
 void update_block(input_t *);
-void update_summary(input_t *, int, int, float, float, float, float, float);
+void update_summary(input_t *, int, int, float, float, float);
 void update_plot(input_t *);
 void draw_column(input_t *, int, float, int);
 char *format_float(input_t *, float);
@@ -83,97 +83,78 @@ void arrange_blocks(void) {
 }
 
 void update_block(input_t *input) {
-  int i, n, histcount;
+  int n, histcount;
   char query[100];
   float prev, cur, min = FLT_MAX, max = FLT_MIN, avg, valsum, devsum, rocsum;
-  int count, curts, prevts, mints;
+  int cnt, curts, prevts, mints;
   sqlite3_stmt *stmt;
   time_t now = time(NULL);
 
   if (input->winhide) return;
 
-  // switch (input->valcnt) {
-  //   default: mvwaddstr(input->win, 4, 7, format_float(input, input->roclast));
-  //   case 2: mvwaddstr(input->win, 3, 7, format_float(input, input->amplast));
-  //   case 1:
-      if (input->crit_above && (*input->vallast > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
-      else if (input->warn_above && (*input->vallast > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
-      else if (input->crit_below && (*input->vallast < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
-      else if (input->warn_below && (*input->vallast < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
-      mvwaddstr(input->win, 2, 7, format_float(input, *input->vallast));
-      wattron(input->win, COLOR_PAIR(1));
-  // }
+  if (input->crit_above && (*input->vallast > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_above && (*input->vallast > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+  else if (input->crit_below && (*input->vallast < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_below && (*input->vallast < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
+  mvwaddstr(input->win, 2, 7, format_float(input, *input->vallast));
+  wattron(input->win, COLOR_PAIR(1));
 
-  // if (db) {
-  //   for (n = 0; n < settings.nsummaries; n++) {
-  //     if (input->valcnt%((n+1)*10)) continue;
-  //     min = FLT_MAX;
-  //     max = FLT_MIN;
-  //     mints = INT_MAX;
-  //     avg = valsum = devsum = rocsum = 0;
-  //     count = 0;
-  //
-  //     i = sprintf(query, "SELECT `value`, `ts` FROM `data` WHERE `input` = %d AND ts > %d", input->sqlid, now-settings.summaries[n]);
-  //     sqlite3_prepare_v2(db, query, i+1, &stmt, NULL);
-  //     if (!stmt) return;
-  //     while ((i = sqlite3_step(stmt)) == SQLITE_ROW) {
-  //       if (sqlite3_column_count(stmt) != 2) break;
-  //       cur = (float)sqlite3_column_double(stmt, 0);
-  //       curts = sqlite3_column_int(stmt, 1);
-  //       if (cur < min) min = cur;
-  //       if (cur > max) max = cur;
-  //       if (curts < mints) mints = curts;
-  //       if (count) rocsum += abs(cur-prev)/(curts-prevts);
-  //       prev = cur;
-  //       prevts = curts;
-  //       count++;
-  //       valsum += cur;
-  //       devsum += abs(cur-valsum/count);
-  //     }
-  //     sqlite3_finalize(stmt);
-  //     if (i != SQLITE_DONE) return;
-  //     if (count && (now-mints > settings.summaries[n]*0.5)) update_summary(input, 14+(n*7), count, valsum, devsum, rocsum, min, max);
-  //   }
-  // }
-  // else {
-  //   for (i = 0; i < input->valcnt && i < VALUE_HIST_SIZE; i++) {
-  //     if (input->valhist[i] < min) min = input->valhist[i];
-  //     if (input->valhist[i] > max) max = input->valhist[i];
-  //     valsum += input->valhist[i];
-  //   }
-  //   histcount = i+1;
-  // }
+  for (n = 0; n < settings.nsummaries; n++) {
+    if (input->valcnt%(n+26)) continue;
+
+    sqlite3_prepare_v2(db, "SELECT COUNT(*), AVG(value), MIN(value), MAX(value) FROM data WHERE input = ?001 AND ts > ?002", 95, &stmt, NULL);
+    if (!stmt) {
+      fprintf(stderr, "Error preparing summaries query: %s\n", sqlite3_errmsg(db));
+      continue;
+    }
+    if (sqlite3_bind_int(stmt, 1, input->sqlid) != SQLITE_OK) {
+      fprintf(stderr, "Error binding param 1 for summaries query: %s\n", sqlite3_errmsg(db));
+      continue;
+    }
+    if (sqlite3_bind_int(stmt, 2, now-settings.summaries[n]) != SQLITE_OK) {
+      fprintf(stderr, "Error binding param 2 for summaries query: %s\n", sqlite3_errmsg(db));
+      continue;
+    }
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+      fprintf(stderr, "Error reading row from summaries query: %s\n", sqlite3_errmsg(db));
+      continue;
+    }
+    if (sqlite3_column_count(stmt) != 4) {
+      fprintf(stderr, "Invalid column count from summaries query: %s\n", sqlite3_errmsg(db));
+      continue;
+    }
+    cnt = (float)sqlite3_column_double(stmt, 0);
+    avg = (float)sqlite3_column_double(stmt, 1);
+    min = (float)sqlite3_column_double(stmt, 2);
+    max = (float)sqlite3_column_double(stmt, 3);
+    sqlite3_finalize(stmt);
+
+    if (cnt) update_summary(input, 14+(n*7), cnt, avg, min, max);
+  }
 
   update_plot(input);
   wrefresh(input->win);
 }
 
-void update_summary(input_t *input, int offset, int cnt, float valsum, float ampsum, float rocsum, float min, float max) {
-  switch (cnt) {
-  default:
-    mvwaddstr(input->win, 3, offset, format_float(input, ampsum/(cnt-1)));
-  case 2:
-    mvwaddstr(input->win, 4, offset, format_float(input, rocsum/(cnt-1)));
-  case 1:
-    if (input->crit_above && (valsum/cnt > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
-    else if (input->warn_above && (valsum/cnt > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
-    else if (input->crit_below && (valsum/cnt < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
-    else if (input->warn_below && (valsum/cnt < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
-    mvwaddstr(input->win, 2, offset, format_float(input, valsum/cnt));
-    wattron(input->win, COLOR_PAIR(1));
-    if (input->crit_above && (min > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
-    else if (input->warn_above && (min > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
-    else if (input->crit_below && (min < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
-    else if (input->warn_below && (min < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
-    mvwaddstr(input->win, 5, offset, format_float(input, min));
-    wattron(input->win, COLOR_PAIR(1));
-    if (input->crit_above && (max > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
-    else if (input->warn_above && (max > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
-    else if (input->crit_below && (max < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
-    else if (input->warn_below && (max < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
-    mvwaddstr(input->win, 6, offset, format_float(input, max));
-    wattron(input->win, COLOR_PAIR(1));
-  }
+void update_summary(input_t *input, int offset, int cnt, float avg, float min, float max) {
+  if (input->crit_above && (avg > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_above && (avg > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+  else if (input->crit_below && (avg < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_below && (avg < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
+  mvwaddstr(input->win, 2, offset, format_float(input, avg));
+  wattron(input->win, COLOR_PAIR(1));
+  if (input->crit_above && (min > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_above && (min > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+  else if (input->crit_below && (min < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_below && (min < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
+  mvwaddstr(input->win, 5, offset, format_float(input, min));
+  wattron(input->win, COLOR_PAIR(1));
+  if (input->crit_above && (max > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_above && (max > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
+  else if (input->crit_below && (max < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
+  else if (input->warn_below && (max < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
+  mvwaddstr(input->win, 6, offset, format_float(input, max));
+  wattron(input->win, COLOR_PAIR(1));
 }
 
 void update_plot(input_t *input) {

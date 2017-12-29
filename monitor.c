@@ -32,7 +32,7 @@ void do_winch(int sig) {
 int main(int argc, char *argv[]) {
   char query[250];
   const char *name, *sub;
-  int i, id;
+  int i, id, inputid, maxid = 0;
   double value;
   input_t *input;
   sqlite3_stmt *stmt;
@@ -48,7 +48,7 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Failed to open sqlite database '%s': %s\n", settings.sqlite, sqlite3_errmsg(db));
     return EXIT_FAILURE;
   }
-  sqlite3_prepare_v2(db, "SELECT `id`, `name`, `sub` FROM inputs", 39, &stmt, NULL);
+  sqlite3_prepare_v2(db, "SELECT `id`, `name`, `sub` FROM inputs", 40, &stmt, NULL);
   if (!stmt) {
     fprintf(stderr, "Failed to prepare query for inputs on SQLite db: %s\n", sqlite3_errmsg(db));
     return EXIT_FAILURE;
@@ -59,10 +59,10 @@ int main(int argc, char *argv[]) {
     name = sqlite3_column_text(stmt, 1);
     sub = sqlite3_column_text(stmt, 2);
     for (input = inputs; input; input = input->next) {
-      if (input->parent) {
-        if (sub && !strcmp(input->name, sub) && !strcmp(input->parent->name, name)) input->sqlid = id;
+      if (!strcmp(input->name, name)) {
+        if (sub) input = add_input((char *)sub, input);
+        input->sqlid = id;
       }
-      else if (!sub && !strcmp(input->name, name)) input->sqlid = id;
     }
   }
   if (i != SQLITE_DONE) {
@@ -74,6 +74,32 @@ int main(int argc, char *argv[]) {
   ioctl(0, TIOCGWINSZ, &settings.ws);
   go_ncurses();
 
+  for (input = inputs; input; input = input->next) {
+    if (!input->sqlid) continue;
+    sqlite3_prepare_v2(db, "SELECT rowid, value FROM data WHERE input = ? ORDER BY ts DESC LIMIT 25", 81, &stmt, NULL);
+    if (!stmt) {
+      fprintf(stderr, "Failed to prepare query for latest data: %s\n", sqlite3_errmsg(db));
+      return EXIT_FAILURE;
+    }
+    if (sqlite3_bind_int(stmt, 1, input->sqlid) != SQLITE_OK) {
+      fprintf(stderr, "Failed to bind param 1 on initial data query: %s\n", sqlite3_errmsg(db));
+      return EXIT_FAILURE;
+    }
+    while ((i = sqlite3_step(stmt)) == SQLITE_ROW) {
+      if (sqlite3_column_count(stmt) != 2) break;
+      id = sqlite3_column_int(stmt, 0);
+      value = sqlite3_column_double(stmt, 1);
+      if (id > maxid) maxid = id;
+      if (input->vallast-input->valhist == VALUE_HIST_SIZE-1) input->vallast = input->valhist;
+      else input->vallast++;
+      input->valcnt++;
+      *input->vallast = value;
+    }
+    sqlite3_finalize(stmt);
+    if (i != SQLITE_DONE) fprintf(stderr, "Error while reading data from SQLite db: %s\n", sqlite3_errmsg(db));
+    update_block(input);
+  }
+
   while (1) {
     if (settings.winch) {
       ioctl(0, TIOCGWINSZ, &settings.ws);
@@ -83,17 +109,23 @@ int main(int argc, char *argv[]) {
       settings.winch = 0;
     }
 
-    sqlite3_prepare_v2(db, "SELECT data.input, data.value FROM data WHERE ts > strftime('%s', 'now')-61 ORDER BY ts", 88, &stmt, NULL);
+    sqlite3_prepare_v2(db, "SELECT rowid, input, value FROM data WHERE rowid > ? ORDER BY ts", 65, &stmt, NULL);
     if (!stmt) {
       fprintf(stderr, "Failed to prepare query for latest data on SQLite db: %s\n", sqlite3_errmsg(db));
       return EXIT_FAILURE;
     }
+    if (sqlite3_bind_int(stmt, 1, maxid) != SQLITE_OK) {
+      fprintf(stderr, "Error binding param 1 for latest data query: %s\n", sqlite3_errmsg(db));
+      return EXIT_FAILURE;
+    }
     while ((i = sqlite3_step(stmt)) == SQLITE_ROW) {
-      if (sqlite3_column_count(stmt) != 2) break;
+      if (sqlite3_column_count(stmt) != 3) break;
       id = sqlite3_column_int(stmt, 0);
-      value = sqlite3_column_double(stmt, 1);
+      inputid = sqlite3_column_int(stmt, 1);
+      value = sqlite3_column_double(stmt, 2);
+      if (id > maxid) maxid = id;
       for (input = inputs; input; input = input->next) {
-        if (id == input->sqlid) {
+        if (inputid == input->sqlid) {
           if (input->vallast-input->valhist == VALUE_HIST_SIZE-1) input->vallast = input->valhist;
           else input->vallast++;
           input->valcnt++;
@@ -103,7 +135,7 @@ int main(int argc, char *argv[]) {
       }
     }
     sqlite3_finalize(stmt);
-    if (i != SQLITE_DONE) fprintf(stderr, "Error while reading latest data from SQLite db: %s\n", sqlite3_errmsg(db));
+    if (i != SQLITE_DONE) fprintf(stderr, "Error while reading data from SQLite db: %s\n", sqlite3_errmsg(db));
 
     sleep(60);
   }
