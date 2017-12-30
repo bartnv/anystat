@@ -151,8 +151,10 @@ struct {
   int logsize;
   char *uplinkhost;
   int uplinkport;
-  int uplinksock;
   char *uplinkprefix;
+  int uplinksock;
+  int uplinkpipe[2];
+  pthread_t uplinkthread;
   char *sqlite;
   char *warncmd;
   char *critcmd;

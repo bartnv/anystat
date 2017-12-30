@@ -51,13 +51,14 @@ void open_sockets(void);
 void set(char **, char *);
 void write_log(input_t *, float);
 void *write_db();
+void *write_sock();
 void send_alert(int, char *);
 char *gettok(char *, int, char);
 char *itodur(int);
 char *itoa(int);
 void sig_winch(int);
 void do_exit(int);
-void uplink_connect(void);
+int uplink_connect(void);
 
 int main(int argc, char *argv[]) {
   struct timeval tv;
@@ -148,9 +149,18 @@ int main(int argc, char *argv[]) {
       return EXIT_FAILURE;
     }
     pthread_create(&dbtid, NULL, write_db, NULL);
-    pthread_setname_np(dbtid, "db_writer");
+    pthread_setname_np(dbtid, "sqlite_writer");
   }
   else db = NULL;
+
+  if (settings.uplinkhost && settings.uplinkport) {
+    if (pipe(settings.uplinkpipe)) {
+      perror("Error creating socket writer pipe: ");
+      return EXIT_FAILURE;
+    }
+    pthread_create(&settings.uplinkthread, NULL, write_sock, NULL);
+    pthread_setname_np(settings.uplinkthread, "socket_writer");
+  }
 
   start_tails();
   start_pipes();
@@ -800,6 +810,21 @@ void process(input_t *input, float fl) {
     struct update upd = { input->sqlid, now, fl };
     if (write(dbfd[1], &upd, sizeof(struct update)) != sizeof(struct update)) perror("Failed to write to Sqlite writer pipe: ");
   }
+  if (settings.uplinkhost && settings.uplinkport) {
+    int c;
+    char buf[501] = "";
+    if (settings.uplinkprefix) {
+      strcat(buf, settings.uplinkprefix);
+      strcat(buf, ".");
+    }
+    if (input->parent) {
+      strcat(buf, input->parent->name);
+      strcat(buf, ".");
+    }
+    sprintf(buf+strlen(buf), "%s %f %d\n", input->name, fl, now);
+    c = strlen(buf);
+    if (write(settings.uplinkpipe[1], buf, c) != c) perror("Failed to write to socket writer pipe: ");
+  }
 
   display(input);
 
@@ -834,34 +859,38 @@ void process(input_t *input, float fl) {
     }
     else input->alert_hold = 0;
   }
+}
 
-  if (settings.logdir) write_log(input, fl);
-  if (settings.uplinkhost && settings.uplinkport) {
-    int c;
-    char buf[501];
-    buf[0] = 0;
-    if (settings.uplinkprefix) {
-      strcat(buf, settings.uplinkprefix);
-      strcat(buf, ".");
-    }
-    if (input->parent) {
-      strcat(buf, input->parent->name);
-      strcat(buf, ".");
-    }
+void *write_sock() {
+  int last, done, r, todo = 0;
+  char buf[1401] = "";
 
-    sprintf(buf+strlen(buf), "%s %f %d\n", input->name, fl, now);
+  printf("Started socket writer thread\n");
+  last = time(NULL);
 
-    if (!settings.uplinksock) uplink_connect();
-    if (settings.uplinksock) {
-      c = write(settings.uplinksock, buf, strlen(buf));
-      if (c == -1) {
-        if (errno == EPIPE) {
-          close(settings.uplinksock);
-          settings.uplinksock = 0;
-        }
+  while (1) {
+    if ((r = read(settings.uplinkpipe[0], buf+todo, 1400-todo)) <= 0) break;
+    todo += r;
+    r = time(NULL);
+    if ((r-last < 60) && (todo < 1300)) continue;
+    last = r;
+    done = 0;
+    while (1) {
+      while (!settings.uplinksock) {
+        if (uplink_connect() == -1) sleep(60);
       }
+      if ((r = write(settings.uplinksock, buf+done, todo-done)) <= 0) {
+        perror("Write error to uplink socket: ");
+        close(settings.uplinksock);
+        settings.uplinksock = 0;
+        sleep(1);
+      }
+      else done += r;
+      if (done == todo) break;
     }
+    todo = 0;
   }
+  perror("Failed to read from uplink pipe: ");
 }
 
 void *write_db() {
@@ -870,7 +899,7 @@ void *write_db() {
   struct update upd;
   sqlite3_stmt *stmt;
 
-  printf("Started Sqlite writer thread\n");
+  printf("Started sqlite writer thread\n");
 
   sqlite3_prepare_v2(db, "INSERT INTO `data` (`input`, `ts`, `value`) VALUES (?001, ?002, ?003)", -1, &stmt, NULL);
   if (!stmt) {
@@ -904,7 +933,7 @@ void *write_db() {
   perror("Sqlite writer failed to read from pipe: ");
 }
 
-void uplink_connect() {
+int uplink_connect() {
   int c;
   int sock;
   struct sockaddr_in sa;
@@ -915,17 +944,18 @@ void uplink_connect() {
 
   if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
     fprintf(stderr, "Failed to create socket for uplink\n");
-    return;
+    return -1;
   }
   setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, 0, 0);
   if ((c = connect(sock, (struct sockaddr *) &sa, sizeof(sa))) < 0) {
     if (errno != EINPROGRESS) {
       fprintf(stderr, "Failed to connect to uplink host %s ([%d] %s) %d\n", settings.uplinkhost, errno, strerror(errno));
       close(sock);
-      return;
+      return -1;
     }
   }
   settings.uplinksock = sock;
+  return 0;
 }
 
 void report_consol(input_t *input) {
