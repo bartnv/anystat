@@ -140,13 +140,11 @@ typedef struct input_t {
 #endif
 } input_t;
 
-typedef struct {
-  float count;
-  float min;
-  float max;
-  float sum;
-  float deltasum;
-} result;
+typedef struct update {
+  int id;
+  int ts;
+  float val;
+} update;
 
 struct {
   char *logdir;
@@ -213,5 +211,7 @@ time_t now;
 int inot;
 
 sqlite3 *db;
+int dbfd[2];
+pthread_t dbtid;
 
 char mainbuf[MAIN_BUF_SIZE+1];

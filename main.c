@@ -24,6 +24,7 @@
 #include <signal.h>
 #include <dirent.h> // scandir(), versionsort()
 #include <locale.h> // setlocale()
+#include <pthread.h>
 #include <sqlite3.h> // sqlite support (probably make this an IFDEF in the future to avoid always having this dependency)
 
 #include "main.h"
@@ -49,6 +50,7 @@ void open_fifos(void);
 void open_sockets(void);
 void set(char **, char *);
 void write_log(input_t *, float);
+void *write_db();
 void send_alert(int, char *);
 char *gettok(char *, int, char);
 char *itodur(int);
@@ -141,6 +143,12 @@ int main(int argc, char *argv[]) {
         }
       }
     }
+    if (pipe(dbfd)) {
+      perror("Error creating db writer pipe: ");
+      return EXIT_FAILURE;
+    }
+    pthread_create(&dbtid, NULL, write_db, NULL);
+    pthread_setname_np(dbtid, "db_writer");
   }
   else db = NULL;
 
@@ -789,12 +797,8 @@ void process(input_t *input, float fl) {
 
   if (settings.logdir) write_log(input, fl);
   if (db && input->sqlid) {
-    char *err, query[100];
-    sprintf(query, "INSERT INTO `data` (`input`, `ts`, `value`) VALUES (%d, %d, %f)", input->sqlid, now, fl);
-    if (sqlite3_exec(db, query, NULL, NULL, &err) != SQLITE_OK) {
-      fprintf(stderr, "Sqlite error: %s\n", err);
-      sqlite3_free(err);
-    }
+    struct update upd = { input->sqlid, now, fl };
+    if (write(dbfd[1], &upd, sizeof(struct update)) != sizeof(struct update)) perror("Failed to write to Sqlite writer pipe: ");
   }
 
   display(input);
@@ -858,6 +862,46 @@ void process(input_t *input, float fl) {
       }
     }
   }
+}
+
+void *write_db() {
+  int r;
+  char *err, query[100];
+  struct update upd;
+  sqlite3_stmt *stmt;
+
+  printf("Started Sqlite writer thread\n");
+
+  sqlite3_prepare_v2(db, "INSERT INTO `data` (`input`, `ts`, `value`) VALUES (?001, ?002, ?003)", -1, &stmt, NULL);
+  if (!stmt) {
+    fprintf(stderr, "Failed to prepare query for update insert: %s\n", sqlite3_errmsg(db));
+    return NULL;
+  }
+
+  while (read(dbfd[0], &upd, sizeof(struct update)) == sizeof(struct update)) {
+    if (sqlite3_bind_int(stmt, 1, upd.id) != SQLITE_OK) {
+      fprintf(stderr, "Failed to bind param 1 on update insert query: %s\n", sqlite3_errmsg(db));
+      return NULL;
+    }
+    if (sqlite3_bind_int(stmt, 2, upd.ts) != SQLITE_OK) {
+      fprintf(stderr, "Failed to bind param 2 on update insert query: %s\n", sqlite3_errmsg(db));
+      return NULL;
+    }
+    if (sqlite3_bind_double(stmt, 3, upd.val) != SQLITE_OK) {
+      fprintf(stderr, "Failed to bind param 3 on update insert query: %s\n", sqlite3_errmsg(db));
+      return NULL;
+    }
+    while ((r = sqlite3_step(stmt)) == SQLITE_BUSY) {
+      fprintf(stderr, "Database is locked; delaying update %d for %s\n", upd.ts, upd.id);
+      sleep(1);
+    }
+    if (r != SQLITE_DONE) {
+      fprintf(stderr, "Error while writing update to Sqlite database: %s\n", sqlite3_errmsg(db));
+      return NULL;
+    }
+    sqlite3_reset(stmt);
+  }
+  perror("Sqlite writer failed to read from pipe: ");
 }
 
 void uplink_connect() {
