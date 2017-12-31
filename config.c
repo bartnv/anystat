@@ -234,7 +234,34 @@ void process_setting(input_t *input, char *name, char *value) {
       return;
     }
     else if (!strcasecmp("sqlite", name) && value) {
-      set(&settings.sqlite, value);
+      set(&settings.sqlitefile, value);
+      return;
+    }
+    else if (!strcasecmp("sqlite-prune", name) && value) {
+      int n;
+      char *unit;
+
+      errno = 0;
+      n = strtol(value, &unit, 10);
+      if (errno || n <= 0) {
+        fprintf(stderr, "Invalid sqlite-prune value '%s'\n", value);
+        return;
+      }
+      switch (*unit) {
+        case 's': break;
+        case 'm': n *= 60; break;
+        case 'h': n *= 3600; break;
+        case 'd': n *= 3600*24; break;
+        case 'w': n *= 3600*24*7; break;
+        case 'y': n *= 3600*24*365; break;
+        default: fprintf(stderr, "Invalid unit in sqlite-prune value '%s'\n", value); return;
+      }
+      if (n < 0) {
+        fprintf(stderr, "Invalid sqlite-prune value '%s'\n", value);
+        return;
+      }
+      if ((settings.sqliteprune = n)) printf("Pruning sqlite data older than %s every %s\n", value, itodur(DB_PRUNE_INTERVAL));
+      else printf("Pruning of sqlite data is disabled\n");
       return;
     }
     else if (!strcasecmp("summaries", name) && value) {

@@ -50,6 +50,7 @@ void open_fifos(void);
 void open_sockets(void);
 void set(char **, char *);
 void write_log(input_t *, float);
+void prune_db();
 void *write_db();
 void *write_sock();
 void send_alert(int, char *);
@@ -98,19 +99,19 @@ int main(int argc, char *argv[]) {
     set(&settings.logdir, NULL);
   }
 
-  if (settings.sqlite) {
+  if (settings.sqlitefile) {
     int id;
     const unsigned char *name, *sub;
     sqlite3_stmt *stmt;
 
-    if ((c = sqlite3_open(settings.sqlite, &db))) {
-      fprintf(stderr, "Failed to open sqlite database '%s': %s\n", settings.sqlite, sqlite3_errmsg(db));
+    if ((c = sqlite3_open(settings.sqlitefile, &settings.sqlitehandle))) {
+      fprintf(stderr, "Failed to open sqlite database '%s': %s\n", settings.sqlitefile, sqlite3_errmsg(settings.sqlitehandle));
       exit(EXIT_FAILURE);
     }
-    printf("Opened SQLite database %s\n", settings.sqlite);
-    sqlite3_prepare_v2(db, "SELECT `id`, `name`, `sub` FROM inputs", 39, &stmt, NULL);
+    printf("Opened SQLite database %s\n", settings.sqlitefile);
+    sqlite3_prepare_v2(settings.sqlitehandle, "SELECT `id`, `name`, `sub` FROM inputs", 39, &stmt, NULL);
     if (!stmt) {
-      fprintf(stderr, "Failed to prepare query for inputs on SQLite db: %s\n", sqlite3_errmsg(db));
+      fprintf(stderr, "Failed to prepare query for inputs on SQLite db: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       exit(EXIT_FAILURE);
     }
     while ((c = sqlite3_step(stmt)) == SQLITE_ROW) {
@@ -126,7 +127,7 @@ int main(int argc, char *argv[]) {
       }
     }
     if (c != SQLITE_DONE) {
-      fprintf(stderr, "Error while reading inputs from SQLite db: %s\n", sqlite3_errmsg(db));
+      fprintf(stderr, "Error while reading inputs from SQLite db: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       return EXIT_FAILURE;
     }
     for (input = inputs; input; input = input->next) {
@@ -134,24 +135,24 @@ int main(int argc, char *argv[]) {
         char *err, query[100];
         if (input->parent) sprintf(query, "INSERT INTO `inputs` (`name`, `sub`) VALUES ('%s', '%s')", input->parent->name, input->name);
         else sprintf(query, "INSERT INTO `inputs` (`name`) VALUES ('%s')", input->name);
-        if (sqlite3_exec(db, query, NULL, NULL, &err) != SQLITE_OK) {
+        if (sqlite3_exec(settings.sqlitehandle, query, NULL, NULL, &err) != SQLITE_OK) {
           fprintf(stderr, "Sqlite error: %s\n", err);
           sqlite3_free(err);
         }
         else {
-          input->sqlid = sqlite3_last_insert_rowid(db);
+          input->sqlid = sqlite3_last_insert_rowid(settings.sqlitehandle);
           printf("Added new input %s to SQLite db with id %d\n", input->name, input->sqlid);
         }
       }
     }
-    if (pipe(dbfd)) {
+    if (pipe(settings.sqlitepipe)) {
       perror("Error creating db writer pipe: ");
       return EXIT_FAILURE;
     }
-    pthread_create(&dbtid, NULL, write_db, NULL);
-    pthread_setname_np(dbtid, "sqlite_writer");
+    pthread_create(&settings.sqlitethread, NULL, write_db, NULL);
+    pthread_setname_np(settings.sqlitethread, "sqlite_writer");
   }
-  else db = NULL;
+  else settings.sqlitehandle = NULL;
 
   if (settings.uplinkhost && settings.uplinkport) {
     if (pipe(settings.uplinkpipe)) {
@@ -603,26 +604,26 @@ void do_namepos(input_t *input, char *name, char *value) {
       *newchild->crit_below = *input->crit_below;
     }
 
-    if (db) {
+    if (settings.sqlitehandle) {
       int c;
       char *err, query[100];
       sqlite3_stmt *stmt;
 
       if (newchild->parent) c = sprintf(query, "SELECT `id` FROM `inputs` WHERE `name` = '%s' AND `sub` = '%s'", newchild->parent->name, newchild->name);
       else c = sprintf(query, "SELECT `id` FROM `inputs` WHERE `name` = '%s' AND `sub` IS NULL", newchild->name);
-      sqlite3_prepare_v2(db, query, -1, &stmt, NULL);
+      sqlite3_prepare_v2(settings.sqlitehandle, query, -1, &stmt, NULL);
       if (stmt && (sqlite3_step(stmt) == SQLITE_ROW)) newchild->sqlid = sqlite3_column_int(stmt, 0);
       else {
         sqlite3_finalize(stmt);
 
         if (newchild->parent) sprintf(query, "INSERT INTO `inputs` (`name`, `sub`) VALUES ('%s', '%s')", newchild->parent->name, newchild->name);
         else sprintf(query, "INSERT INTO `inputs` (`name`) VALUES ('%s')", newchild->name);
-        if (sqlite3_exec(db, query, NULL, NULL, &err) != SQLITE_OK) {
+        if (sqlite3_exec(settings.sqlitehandle, query, NULL, NULL, &err) != SQLITE_OK) {
           fprintf(stderr, "Sqlite error: %s\n", err);
           sqlite3_free(err);
         }
         else {
-          newchild->sqlid = sqlite3_last_insert_rowid(db);
+          newchild->sqlid = sqlite3_last_insert_rowid(settings.sqlitehandle);
           printf("Added new input %s to SQLite db with id %d\n", newchild->name, newchild->sqlid);
         }
       }
@@ -806,9 +807,9 @@ void process(input_t *input, float fl) {
   *input->vallast = fl;
 
   if (settings.logdir) write_log(input, fl);
-  if (db && input->sqlid) {
+  if (settings.sqlitehandle && input->sqlid) {
     struct update upd = { input->sqlid, now, fl };
-    if (write(dbfd[1], &upd, sizeof(struct update)) != sizeof(struct update)) perror("Failed to write to Sqlite writer pipe: ");
+    if (write(settings.sqlitepipe[1], &upd, sizeof(struct update)) != sizeof(struct update)) perror("Failed to write to Sqlite writer pipe: ");
   }
   if (settings.uplinkhost && settings.uplinkport) {
     int c;
@@ -893,42 +894,77 @@ void *write_sock() {
   perror("Failed to read from uplink pipe: ");
 }
 
-void *write_db() {
+void prune_db() {
   int r;
+  char *err;
+  sqlite3_stmt *stmt;
+
+  sqlite3_prepare_v2(settings.sqlitehandle, "DELETE FROM data WHERE ts < ?", -1, &stmt, NULL);
+  if (!stmt) {
+    fprintf(stderr, "Failed to prepare query for data prune: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+    return;
+  }
+  if (sqlite3_bind_int(stmt, 1, time(NULL)-settings.sqliteprune) != SQLITE_OK) {
+    fprintf(stderr, "Failed to bind param 1 on data prune query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+    return;
+  }
+  while ((r = sqlite3_step(stmt)) == SQLITE_BUSY) {
+    fprintf(stderr, "Database is locked; delaying data prune\n");
+    sleep(1);
+  }
+  if (r != SQLITE_DONE) {
+    fprintf(stderr, "Error during data prune on sqlite database: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+    return;
+  }
+  sqlite3_reset(stmt);
+  printf("Pruned %d rows older than %s from sqlite db\n", sqlite3_changes(settings.sqlitehandle), itodur(settings.sqliteprune));
+  if (sqlite3_exec(settings.sqlitehandle, "VACUUM", NULL, NULL, &err) != SQLITE_OK) {
+    fprintf(stderr, "Failed to VACUUM sqlite database after pruning: %s\n", err);
+    sqlite3_free(err);
+  }
+}
+
+void *write_db() {
+  int r, lastprune;
   char *err, query[100];
   struct update upd;
   sqlite3_stmt *stmt;
 
   printf("Started sqlite writer thread\n");
+  lastprune = time(NULL);
 
-  sqlite3_prepare_v2(db, "INSERT INTO `data` (`input`, `ts`, `value`) VALUES (?001, ?002, ?003)", -1, &stmt, NULL);
+  sqlite3_prepare_v2(settings.sqlitehandle, "INSERT INTO `data` (`input`, `ts`, `value`) VALUES (?001, ?002, ?003)", -1, &stmt, NULL);
   if (!stmt) {
-    fprintf(stderr, "Failed to prepare query for update insert: %s\n", sqlite3_errmsg(db));
+    fprintf(stderr, "Failed to prepare query for update insert: %s\n", sqlite3_errmsg(settings.sqlitehandle));
     return NULL;
   }
 
-  while (read(dbfd[0], &upd, sizeof(struct update)) == sizeof(struct update)) {
+  while (read(settings.sqlitepipe[0], &upd, sizeof(struct update)) == sizeof(struct update)) {
     if (sqlite3_bind_int(stmt, 1, upd.id) != SQLITE_OK) {
-      fprintf(stderr, "Failed to bind param 1 on update insert query: %s\n", sqlite3_errmsg(db));
+      fprintf(stderr, "Failed to bind param 1 on update insert query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       return NULL;
     }
     if (sqlite3_bind_int(stmt, 2, upd.ts) != SQLITE_OK) {
-      fprintf(stderr, "Failed to bind param 2 on update insert query: %s\n", sqlite3_errmsg(db));
+      fprintf(stderr, "Failed to bind param 2 on update insert query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       return NULL;
     }
     if (sqlite3_bind_double(stmt, 3, upd.val) != SQLITE_OK) {
-      fprintf(stderr, "Failed to bind param 3 on update insert query: %s\n", sqlite3_errmsg(db));
+      fprintf(stderr, "Failed to bind param 3 on update insert query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       return NULL;
     }
     while ((r = sqlite3_step(stmt)) == SQLITE_BUSY) {
-      fprintf(stderr, "Database is locked; delaying update %d for %s\n", upd.ts, upd.id);
+      fprintf(stderr, "Database is locked; delaying update %d for %d\n", upd.ts, upd.id);
       sleep(1);
     }
     if (r != SQLITE_DONE) {
-      fprintf(stderr, "Error while writing update to Sqlite database: %s\n", sqlite3_errmsg(db));
+      fprintf(stderr, "Error while writing update to Sqlite database: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       return NULL;
     }
     sqlite3_reset(stmt);
+    if (time(NULL)-lastprune > DB_PRUNE_INTERVAL) { // Every 6 hours
+      prune_db();
+      lastprune = time(NULL);
+    }
   }
   perror("Sqlite writer failed to read from pipe: ");
 }

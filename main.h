@@ -5,9 +5,10 @@
 #define CONFIG_REGEX_NAME "^\\s*([a-zA-Z0-9._-]+)\\s*:\\s*$"
 #define CONFIG_REGEX_SETTING "^\\s*([a-zA-Z-]+)\\s+(?:\"(.*?)\"|'(.*?)'|(.*?))\\s*$"
 
-#define MAIN_BUF_SIZE 4096
-#define MIN_INTERVAL 10
-#define DEF_INTERVAL 60
+#define MAIN_BUF_SIZE      4096
+#define MIN_INTERVAL         10
+#define DEF_INTERVAL         60
+#define DB_PRUNE_INTERVAL 21600 // 6 hours
 
 #define INPUT_CAT      1	// Periodically read file
 #define INPUT_TAIL     2	// Continuously read file
@@ -155,7 +156,11 @@ struct {
   int uplinksock;
   int uplinkpipe[2];
   pthread_t uplinkthread;
-  char *sqlite;
+  char *sqlitefile;
+  sqlite3 *sqlitehandle;
+  int sqlitepipe[2];
+  pthread_t sqlitethread;
+  int sqliteprune;
   char *warncmd;
   char *critcmd;
   int alertrepeat;
@@ -211,9 +216,5 @@ input_t *inputs;
 time_t now;
 
 int inot;
-
-sqlite3 *db;
-int dbfd[2];
-pthread_t dbtid;
 
 char mainbuf[MAIN_BUF_SIZE+1];
