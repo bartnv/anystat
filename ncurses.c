@@ -96,7 +96,7 @@ void check_updates() {
   time_t now = time(NULL);
 
   for (input = inputs; input; input = input->next) {
-    if (input->update < now-61) {
+    if (input->update < now-90) {
       if (input->update < now-3600) wattron(input->win, COLOR_PAIR(3));
       if (input->update == 0) mvwaddstr(input->win, 1, block_width()-9, "no data");
       else mvwprintw(input->win, 1, block_width()-14, "%8s ago", itodur(now-input->update-((now-input->update)%60)));
@@ -124,9 +124,9 @@ void update_block(input_t *input) {
   wattron(input->win, COLOR_PAIR(1));
 
   for (n = 0; n < settings.nsummaries; n++) {
-    if (input->valcnt%(n+26)) continue;
+    if (input->valcnt%(block_width()-8+n)) continue;
 
-    sqlite3_prepare_v2(settings.sqlitehandle, "SELECT COUNT(*), AVG(value), MIN(value), MAX(value) FROM data WHERE input = ?001 AND ts > ?002", 95, &stmt, NULL);
+    sqlite3_prepare_v2(settings.sqlitehandle, "SELECT COUNT(*), AVG(value), MIN(value), MAX(value) FROM data WHERE input = ?001 AND ts > ?002 AND ts <= ?003", 110, &stmt, NULL);
     if (!stmt) {
       fprintf(stderr, "Error preparing summaries query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       continue;
@@ -137,6 +137,10 @@ void update_block(input_t *input) {
     }
     if (sqlite3_bind_int(stmt, 2, now-settings.summaries[n]) != SQLITE_OK) {
       fprintf(stderr, "Error binding param 2 for summaries query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+      continue;
+    }
+    if (sqlite3_bind_int(stmt, 3, now-(n?settings.summaries[n-1]:0)) != SQLITE_OK) {
+      fprintf(stderr, "Error binding param 3 for summaries query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       continue;
     }
     if (sqlite3_step(stmt) != SQLITE_ROW) {
