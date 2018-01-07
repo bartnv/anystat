@@ -3,7 +3,7 @@ void arrange_blocks(void);
 void update_block(input_t *);
 void update_summary(input_t *, int, int, float, float, float);
 void update_plot(input_t *);
-void draw_column(input_t *, int, float, int);
+void draw_column(input_t *, int, int, float, int);
 char *format_float(input_t *, float);
 
 void go_ncurses(void) {
@@ -18,7 +18,7 @@ void go_ncurses(void) {
   if (has_colors() == FALSE) {
     endwin();
     printf("Your terminal does not support color\n");
-    exit(1);
+    exit(EXIT_FAILURE);
   }
   start_color();
   init_pair(1, COLOR_WHITE, COLOR_BLACK);
@@ -31,30 +31,39 @@ void go_ncurses(void) {
   arrange_blocks();
 }
 
+int block_width() {
+  return 28+(settings.nsummaries>3?(settings.nsummaries-3)*7:0);
+}
+int block_height() {
+  return settings.nsummaries?15:11;
+}
+
 void create_block(input_t *input) {
   int i;
+  char title[50];
   WINDOW *win;
 
-  win = newwin(15, 13+(settings.nsummaries*7), 0, 0);
+  win = newwin(block_height(), block_width(), 0, 0);
   input->win = win;
 
   box(win, 0, 0);
   wmove(win, 0, 2);
-  waddch(win, ' ');
-  if (input->parent) wprintw(win, "%s : ", input->parent->name);
-  wprintw(win, "%s ", input->name);
-  mvwaddstr(win, 1, 2, "     Last ");
-  for (i = 0; i < settings.nsummaries; i++) wprintw(win, "| %4s ", itodur(settings.summaries[i]));
-  mvwaddstr(win, 2, 2, "Val:      ");
-  for (i = 0; i < settings.nsummaries; i++) waddstr(win, "|      ");
-  mvwaddstr(win, 3, 2, "Amp:      ");
-  for (i = 0; i < settings.nsummaries; i++) waddstr(win, "|      ");
-  mvwaddstr(win, 4, 2, "RoC:      ");
-  for (i = 0; i < settings.nsummaries; i++) waddstr(win, "|      ");
-  mvwaddstr(win, 5, 2, "Min:      ");
-  for (i = 0; i < settings.nsummaries; i++) waddstr(win, "|      ");
-  mvwaddstr(win, 6, 2, "Max:      ");
-  for (i = 0; i < settings.nsummaries; i++) waddstr(win, "|      ");
+
+  if (input->parent) snprintf(title, block_width()-5, "%s : %s", input->parent->name, input->name);
+  else snprintf(title, block_width()-5, "%s", input->name);
+  wprintw(win, " %s ", title);
+  mvwaddstr(win, 1, 2, "Last: ");
+  if (settings.nsummaries) {
+    mvwaddstr(win, 2, 2, "Summ:");
+    for (i = 1; i < settings.nsummaries; i++) waddstr(win, "     | ");
+    for (i = 0; i < settings.nsummaries; i++) mvwprintw(win, 2, 7+7*i, " %3s ", itodur(settings.summaries[i]));
+    mvwaddstr(win, 3, 2, "Avg: ");
+    for (i = 1; i < settings.nsummaries; i++) waddstr(win, "     | ");
+    mvwaddstr(win, 4, 2, "Min: ");
+    for (i = 1; i < settings.nsummaries; i++) waddstr(win, "     | ");
+    mvwaddstr(win, 5, 2, "Max: ");
+    for (i = 1; i < settings.nsummaries; i++) waddstr(win, "     | ");
+  }
 }
 void arrange_blocks(void) {
   int x = 0, y = 0, id = 65;
@@ -65,11 +74,11 @@ void arrange_blocks(void) {
   for (input = inputs; input; input = input->next) {
     if (!input->win) continue;
     input->winid = id++;
-    if (x+13+(settings.nsummaries*7) > settings.ws.ws_col) {
+    if (x+block_width() > settings.ws.ws_col) {
       x = 0;
-      y += 15;
+      y += block_height();
     }
-    if (y+15 > settings.ws.ws_row) {
+    if (y+block_height() > settings.ws.ws_row) {
       input->winhide = 1;
       mvwin(input->win, 0, 0);
       continue;
@@ -78,7 +87,7 @@ void arrange_blocks(void) {
     mvwaddch(input->win, 1, 0, input->winid);
     mvwin(input->win, y, x);
     wrefresh(input->win);
-    x += 13+(settings.nsummaries*7);
+    x += block_width();
   }
 }
 
@@ -96,31 +105,31 @@ void update_block(input_t *input) {
   else if (input->warn_above && (*input->vallast > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
   else if (input->crit_below && (*input->vallast < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
   else if (input->warn_below && (*input->vallast < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
-  mvwaddstr(input->win, 2, 7, format_float(input, *input->vallast));
+  mvwaddstr(input->win, 1, 8, format_float(input, *input->vallast));
   wattron(input->win, COLOR_PAIR(1));
 
   for (n = 0; n < settings.nsummaries; n++) {
     if (input->valcnt%(n+26)) continue;
 
-    sqlite3_prepare_v2(db, "SELECT COUNT(*), AVG(value), MIN(value), MAX(value) FROM data WHERE input = ?001 AND ts > ?002", 95, &stmt, NULL);
+    sqlite3_prepare_v2(settings.sqlitehandle, "SELECT COUNT(*), AVG(value), MIN(value), MAX(value) FROM data WHERE input = ?001 AND ts > ?002", 95, &stmt, NULL);
     if (!stmt) {
-      fprintf(stderr, "Error preparing summaries query: %s\n", sqlite3_errmsg(db));
+      fprintf(stderr, "Error preparing summaries query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       continue;
     }
     if (sqlite3_bind_int(stmt, 1, input->sqlid) != SQLITE_OK) {
-      fprintf(stderr, "Error binding param 1 for summaries query: %s\n", sqlite3_errmsg(db));
+      fprintf(stderr, "Error binding param 1 for summaries query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       continue;
     }
     if (sqlite3_bind_int(stmt, 2, now-settings.summaries[n]) != SQLITE_OK) {
-      fprintf(stderr, "Error binding param 2 for summaries query: %s\n", sqlite3_errmsg(db));
+      fprintf(stderr, "Error binding param 2 for summaries query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       continue;
     }
     if (sqlite3_step(stmt) != SQLITE_ROW) {
-      fprintf(stderr, "Error reading row from summaries query: %s\n", sqlite3_errmsg(db));
+      fprintf(stderr, "Error reading row from summaries query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       continue;
     }
     if (sqlite3_column_count(stmt) != 4) {
-      fprintf(stderr, "Invalid column count from summaries query: %s\n", sqlite3_errmsg(db));
+      fprintf(stderr, "Invalid column count from summaries query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       continue;
     }
     cnt = (float)sqlite3_column_double(stmt, 0);
@@ -129,7 +138,7 @@ void update_block(input_t *input) {
     max = (float)sqlite3_column_double(stmt, 3);
     sqlite3_finalize(stmt);
 
-    if (cnt) update_summary(input, 14+(n*7), cnt, avg, min, max);
+    if (cnt) update_summary(input, 7+(n*7), cnt, avg, min, max);
   }
 
   update_plot(input);
@@ -141,24 +150,24 @@ void update_summary(input_t *input, int offset, int cnt, float avg, float min, f
   else if (input->warn_above && (avg > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
   else if (input->crit_below && (avg < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
   else if (input->warn_below && (avg < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
-  mvwaddstr(input->win, 2, offset, format_float(input, avg));
+  mvwaddstr(input->win, 3, offset, format_float(input, avg));
   wattron(input->win, COLOR_PAIR(1));
   if (input->crit_above && (min > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
   else if (input->warn_above && (min > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
   else if (input->crit_below && (min < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
   else if (input->warn_below && (min < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
-  mvwaddstr(input->win, 5, offset, format_float(input, min));
+  mvwaddstr(input->win, 4, offset, format_float(input, min));
   wattron(input->win, COLOR_PAIR(1));
   if (input->crit_above && (max > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
   else if (input->warn_above && (max > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
   else if (input->crit_below && (max < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
   else if (input->warn_below && (max < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
-  mvwaddstr(input->win, 6, offset, format_float(input, max));
+  mvwaddstr(input->win, 5, offset, format_float(input, max));
   wattron(input->win, COLOR_PAIR(1));
 }
 
 void update_plot(input_t *input) {
-  int row, col, i;
+  int row, col, i, top = block_height()-8;
   float *p, min = FLT_MAX, max = FLT_MIN;
 
   p = input->vallast;
@@ -184,56 +193,56 @@ void update_plot(input_t *input) {
   else if (input->warn_above && (max > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
   else if (input->crit_below && (max < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
   else if (input->warn_below && (max < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
-  mvwaddstr(input->win, 7, 2, format_float(input, max));
+  mvwaddstr(input->win, top, 2, format_float(input, max));
   if (input->crit_above && (min+(max-min)/2 > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
   else if (input->warn_above && (min+(max-min)/2 > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
   else if (input->crit_below && (min+(max-min)/2 < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
   else if (input->warn_below && (min+(max-min)/2 < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
   else wattron(input->win, COLOR_PAIR(1));
-  mvwaddstr(input->win, 10, 2, format_float(input, min+(max-min)/2));
+  mvwaddstr(input->win, top+3, 2, format_float(input, min+(max-min)/2));
   if (input->crit_above && (min > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
   else if (input->warn_above && (min > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
   else if (input->crit_below && (min < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
   else if (input->warn_below && (min < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
-  mvwaddstr(input->win, 13, 2, format_float(input, min));
+  mvwaddstr(input->win, top+6, 2, format_float(input, min));
   wattron(input->win, COLOR_PAIR(1));
 
   for (row = 0; row < 7; row++) {
-    wmove(input->win, row+7, 7);
-    for (i = 4+settings.nsummaries*7; i; i--) waddch(input->win, ' ');
+    wmove(input->win, top+row, 7);
+    for (i = block_width()-9; i; i--) waddch(input->win, ' ');
   }
   p = input->vallast;
-  for (col = 3+(settings.nsummaries*7); col >= 0 && input->valcnt-(3+(settings.nsummaries*7)-col) > 0; col--) {
+  for (col = block_width()-10; col >= 0 && input->valcnt-(block_width()-10-col) > 0; col--) {
     if (input->crit_above && (*p > *input->crit_above)) wattron(input->win, COLOR_PAIR(3));
     else if (input->warn_above && (*p > *input->warn_above)) wattron(input->win, COLOR_PAIR(2));
     else if (input->crit_below && (*p < *input->crit_below)) wattron(input->win, COLOR_PAIR(3));
     else if (input->warn_below && (*p < *input->warn_below)) wattron(input->win, COLOR_PAIR(2));
-    draw_column(input, col, min, (int)((*p-min)/(max-min)*12+0.5));
+    draw_column(input, top, col, min, (int)((*p-min)/(max-min)*12+0.5));
     wattron(input->win, COLOR_PAIR(1));
     if (p == input->valhist) p = input->valhist+VALUE_HIST_SIZE-1;
     else p--;
   }
 }
 
-void draw_column(input_t *input, int col, float min, int level) {
-  if (level > 2) mvwaddstr(input->win, 12, 7+col, "\u2588");
-  if (level > 4) mvwaddstr(input->win, 11, 7+col, "\u2588");
-  if (level > 6) mvwaddstr(input->win, 10, 7+col, "\u2588");
-  if (level > 8) mvwaddstr(input->win, 9, 7+col, "\u2588");
-  if (level > 10) mvwaddstr(input->win, 8, 7+col, "\u2588");
+void draw_column(input_t *input, int top, int col, float min, int level) {
+  if (level > 2) mvwaddstr(input->win, top+5, 7+col, "\u2588");
+  if (level > 4) mvwaddstr(input->win, top+4, 7+col, "\u2588");
+  if (level > 6) mvwaddstr(input->win, top+3, 7+col, "\u2588");
+  if (level > 8) mvwaddstr(input->win, top+2, 7+col, "\u2588");
+  if (level > 10) mvwaddstr(input->win, top+1, 7+col, "\u2588");
 
   if ((min >= 0) && (min < 0.001)) {
-    if (level == 0) mvwaddstr(input->win, 13, 7+col, "\u2014");
+    if (level == 0) mvwaddstr(input->win, top+6, 7+col, "\u2014");
     else {
-      mvwaddstr(input->win, 13, 7+col, "\u2580");
-      if (!(level%2)) mvwaddstr(input->win, 13-level/2, 7+col, "\u2584");
+      mvwaddstr(input->win, top+6, 7+col, "\u2580");
+      if (!(level%2)) mvwaddstr(input->win, top+6-level/2, 7+col, "\u2584");
     }
   }
   else {
-    if (level == 0) mvwaddstr(input->win, 13, 7+col, "\u2584");
+    if (level == 0) mvwaddstr(input->win, top+6, 7+col, "\u2584");
     else {
-      mvwaddstr(input->win, 13, 7+col, "\u2588");
-      if (!(level%2)) mvwaddstr(input->win, 13-level/2, 7+col, "\u2584");
+      mvwaddstr(input->win, top+6, 7+col, "\u2588");
+      if (!(level%2)) mvwaddstr(input->win, top+6-level/2, 7+col, "\u2584");
     }
   }
 }
