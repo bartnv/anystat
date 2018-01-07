@@ -91,6 +91,21 @@ void arrange_blocks(void) {
   }
 }
 
+void check_updates() {
+  input_t *input;
+  time_t now = time(NULL);
+
+  for (input = inputs; input; input = input->next) {
+    if (input->update < now-61) {
+      if (input->update < now-3600) wattron(input->win, COLOR_PAIR(3));
+      if (input->update == 0) mvwaddstr(input->win, 1, block_width()-9, "no data");
+      else mvwprintw(input->win, 1, block_width()-14, "%8s ago", itodur(now-input->update-((now-input->update)%60)));
+      wattron(input->win, COLOR_PAIR(1));
+      wrefresh(input->win);
+    }
+  }
+}
+
 void update_block(input_t *input) {
   int n, histcount;
   char query[100];

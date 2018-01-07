@@ -143,6 +143,8 @@ int main(int argc, char *argv[]) {
     sqlite3_finalize(stmt);
     if (i != SQLITE_DONE) fprintf(stderr, "Error while reading data from SQLite db: %s\n", sqlite3_errmsg(settings.sqlitehandle));
 
+    check_updates();
+
     sleep(60);
   }
 }
