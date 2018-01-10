@@ -148,6 +148,9 @@ typedef struct update {
 } update;
 
 struct {
+  char *configfile;
+  int daemon;
+  int syslog;
   char *logdir;
   int logsize;
   char *uplinkhost;

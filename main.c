@@ -1,4 +1,5 @@
 #define _GNU_SOURCE // Needed for versionsort()... makes this code unportable beyond Linux because I'm lazy
+#define _XOPEN_SOURCE // Needed for getopt()
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -6,6 +7,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
+#include <ctype.h>
 #include <errno.h>
 #include <time.h>
 #include <math.h>
@@ -25,6 +27,7 @@
 #include <dirent.h> // scandir(), versionsort()
 #include <locale.h> // setlocale()
 #include <pthread.h>
+#include <syslog.h>
 #include <sqlite3.h> // sqlite support (probably make this an IFDEF in the future to avoid always having this dependency)
 
 #include "main.h"
@@ -58,6 +61,7 @@ char *gettok(char *, int, char);
 char *itodur(int);
 char *itoa(int);
 void sig_winch(int);
+void error_log(const char*, ...);
 void do_exit(int);
 int uplink_connect(void);
 
@@ -71,6 +75,26 @@ int main(int argc, char *argv[]) {
 
   memset(&settings, 0, sizeof(settings));
 
+  while ((c = getopt(argc, argv, "sdc:")) != -1) {
+    switch (c) {
+      case 'c':
+        settings.configfile = optarg;
+        break;
+      case 'd':
+        settings.daemon = 1;
+        break;
+      case 's':
+        settings.syslog = 1;
+        break;
+      case '?':
+        // getopt() will print an error message
+        exit(EXIT_FAILURE);
+      default:
+        fprintf(stderr, "Error: getopt() failed\n");
+        exit(EXIT_FAILURE);
+    }
+  }
+
   signal(SIGCHLD, SIG_IGN);
   signal(SIGPIPE, SIG_IGN);
   signal(SIGWINCH, SIG_IGN);
@@ -80,22 +104,49 @@ int main(int argc, char *argv[]) {
   setlinebuf(stdout);
   setlocale(LC_ALL, "en_US.UTF-8");
 
+  if (settings.syslog) {
+    setlogmask(LOG_UPTO(LOG_NOTICE));
+    openlog("anystat", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_USER);
+    error_log("Logging to syslog started\n");
+  }
+
   inot = inotify_init();
   if (inot == -1) {
-    perror("inotify_init()");
-    exit(-1);
+    error_log("inotify_init() failed: %s\n", strerror(errno));
+    exit(EXIT_FAILURE);
   }
   if (fcntl(inot, F_SETFL, O_NONBLOCK) == -1) {
-    perror("fcntl()");
+    error_log("fcntl() failed: %s\n", strerror(errno));
     exit(EXIT_FAILURE);
+  }
+
+  if (settings.daemon) {
+    switch (c = fork()) {
+      case 0:
+        if ((c = setsid()) == -1) {
+          error_log("setsid() failed: %s\n", strerror(errno));
+          exit(EXIT_FAILURE);
+        }
+        chdir("/");
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
+        break;
+      case -1:
+        error_log("fork() failed: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+      default:
+        printf("Daemonized with PID %d\n", c);
+        exit(EXIT_SUCCESS);
+    }
   }
 
   now = time(NULL);
 
-  if (argc > 1) read_config(argv[1]);
+  if (settings.configfile) read_config(settings.configfile);
   else read_config(NULL);
   if (settings.logdir && chdir(settings.logdir)) {
-    fprintf(stderr, "Failed to change to log directory '%s': %s (logging disabled)\n", settings.logdir, strerror(errno));
+    error_log("Failed to change to log directory '%s': %s (logging disabled)\n", settings.logdir, strerror(errno));
     set(&settings.logdir, NULL);
   }
 
@@ -105,13 +156,13 @@ int main(int argc, char *argv[]) {
     sqlite3_stmt *stmt;
 
     if ((c = sqlite3_open(settings.sqlitefile, &settings.sqlitehandle))) {
-      fprintf(stderr, "Failed to open sqlite database '%s': %s\n", settings.sqlitefile, sqlite3_errmsg(settings.sqlitehandle));
+      error_log("Failed to open sqlite database '%s': %s\n", settings.sqlitefile, sqlite3_errmsg(settings.sqlitehandle));
       exit(EXIT_FAILURE);
     }
     printf("Opened SQLite database %s\n", settings.sqlitefile);
     sqlite3_prepare_v2(settings.sqlitehandle, "SELECT `id`, `name`, `sub` FROM inputs", 39, &stmt, NULL);
     if (!stmt) {
-      fprintf(stderr, "Failed to prepare query for inputs on SQLite db: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+      error_log("Failed to prepare query for inputs on SQLite db: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       exit(EXIT_FAILURE);
     }
     while ((c = sqlite3_step(stmt)) == SQLITE_ROW) {
@@ -127,7 +178,7 @@ int main(int argc, char *argv[]) {
       }
     }
     if (c != SQLITE_DONE) {
-      fprintf(stderr, "Error while reading inputs from SQLite db: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+      error_log("Error while reading inputs from SQLite db: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       return EXIT_FAILURE;
     }
     for (input = inputs; input; input = input->next) {
@@ -136,7 +187,7 @@ int main(int argc, char *argv[]) {
         if (input->parent) sprintf(query, "INSERT INTO `inputs` (`name`, `sub`) VALUES ('%s', '%s')", input->parent->name, input->name);
         else sprintf(query, "INSERT INTO `inputs` (`name`) VALUES ('%s')", input->name);
         if (sqlite3_exec(settings.sqlitehandle, query, NULL, NULL, &err) != SQLITE_OK) {
-          fprintf(stderr, "Sqlite error: %s\n", err);
+          error_log("Sqlite error: %s\n", err);
           sqlite3_free(err);
         }
         else {
@@ -297,7 +348,7 @@ int main(int argc, char *argv[]) {
               break;
             }
           }
-          if (!input) fprintf(stderr, "No input found matching inotify event\n");
+          if (!input) error_log("No input found matching inotify event\n");
         }
       }
       for (input = inputs; input; input = input->next) {
@@ -401,7 +452,7 @@ int main(int argc, char *argv[]) {
             }
           }
           else {
-            printf("Input %s closed pipe unexpectedly\n", input->name);
+            error_log("Input %s closed pipe unexpectedly\n", input->name);
           }
         }
       }
@@ -417,7 +468,7 @@ void do_cat(input_t *input) {
   FILE *fp;
 
   if (!(fp = fopen(input->cat->filename, "r"))) {
-    fprintf(stderr, "Failed to open file %s for input %s\n", input->cat->filename, input->name);
+    error_log("Failed to open file %s for input %s\n", input->cat->filename, input->name);
     return;
   }
 
@@ -438,8 +489,8 @@ void do_cat(input_t *input) {
   if (input->consol && !(input->consol & CONSOL_FIRST)) report_consol(input);
 
   if (feof(fp)) {
-    if (input->line) fprintf(stderr, "Not enough lines in file %s (line %d requested, only %d found)\n", input->cat->filename, input->line, input->count);
-    if (input->skip > input->count) fprintf(stderr, "Not enough lines in file %s (skip %d specified, only %d lines found)\n", input->cat->filename, input->skip, input->count);
+    if (input->line) error_log("Not enough lines in file %s (line %d requested, only %d found)\n", input->cat->filename, input->line, input->count);
+    if (input->skip > input->count) error_log("Not enough lines in file %s (skip %d specified, only %d lines found)\n", input->cat->filename, input->skip, input->count);
   }
 
   fclose(fp);
@@ -454,19 +505,19 @@ void do_tail(input_t *input) {
   if (!input->tail->reopen) {
     if ((r = stat(input->tail->filename, &statbuf)) != -1) {
       if (statbuf.st_ino != input->tail->inode) {
-        fprintf(stderr, "Input file has changed inode; reopening...\n");
+        error_log("Input file has changed inode; reopening...\n");
         input->tail->reopen = 1;
         input->tail->inode = statbuf.st_ino;
       }
       else if (statbuf.st_size == 0) {
         rewind(input->tail->fp);
-        fprintf(stderr, "Input file for %s has been truncated\n", input->name);
+        error_log("Input file for %s has been truncated\n", input->name);
       }
       else if (statbuf.st_size < input->tail->size) {
         rewind(input->tail->fp);
 //        fseek(input->tail->fp, 0, SEEK_END);
 //        input->tail->size = statbuf.st_size;
-        fprintf(stderr, "Input file for %s has shrunk %d bytes\n", input->name, input->tail->size-statbuf.st_size);
+        error_log("Input file for %s has shrunk %d bytes\n", input->name, input->tail->size-statbuf.st_size);
       }
       input->tail->size = statbuf.st_size;
     }
@@ -477,7 +528,7 @@ void do_tail(input_t *input) {
 
   if (input->tail->reopen) {
     if (!input->tail->fpnew) {
-      fprintf(stderr, "Trying to open new input file after move/delete\n");
+      error_log("Trying to open new input file after move/delete\n");
       if (!(input->tail->fpnew = fopen(input->tail->filename, "r"))) {
         input->tail->fpnew = 0;
         perror("Failed to open new input file after move/delete");
@@ -490,14 +541,14 @@ void do_tail(input_t *input) {
       else if ((input->tail->watch = inotify_add_watch(inot, input->tail->filename, IN_DELETE_SELF|IN_MOVE_SELF)) < 0) {
         fclose(input->tail->fpnew);
         input->tail->fpnew = 0;
-        fprintf(stderr, "Error adding inotify watch for input %s file %s: %m\n", input->name, input->tail->filename);
+        error_log("Error adding inotify watch for input %s file %s: %m\n", input->name, input->tail->filename);
       }
       else if (settings.skipexistlines) fseek(input->tail->fpnew, 0, SEEK_END); // Skip lines already in the file when it was moved in place
       else do_tail_fp(input, input->tail->fpnew, 0);
     }
     else {
       if (!input->count) {
-        fprintf(stderr, "No lines were added to old input file in one cycle, closing...\n");
+        error_log("No lines were added to old input file in one cycle, closing...\n");
         inotify_rm_watch(fileno(input->tail->fp), inot);
         fclose(input->tail->fp);
         input->tail->fp = input->tail->fpnew;
@@ -512,7 +563,7 @@ void do_tail(input_t *input) {
         do_tail_fp(input, input->tail->fpnew, 0);
       }
     }
-    if (input->tail->reopen > 2) fprintf(stderr, "Input %s running in dual file mode for more than 2 cycles\n", input->name);
+    if (input->tail->reopen > 2) error_log("Input %s running in dual file mode for more than 2 cycles\n", input->name);
   }
 
   if (input->subtype & TYPE_COUNT) process(input, input->count);
@@ -562,7 +613,7 @@ void do_namepos(input_t *input, char *name, char *value) {
   if (!child->next || !child->next->parent || (r < 0)) { // No matching child found, add it at this position in the linked list
     newchild = (input_t *)malloc(sizeof(input_t));
     if (!newchild) {
-      fprintf(stderr, "Failed to allocate memory for new child %s found on input %s\n", name, input->name);
+      error_log("Failed to allocate memory for new child %s found on input %s\n", name, input->name);
       return;
     }
     memset(newchild, 0, sizeof(input_t));
@@ -619,7 +670,7 @@ void do_namepos(input_t *input, char *name, char *value) {
         if (newchild->parent) sprintf(query, "INSERT INTO `inputs` (`name`, `sub`) VALUES ('%s', '%s')", newchild->parent->name, newchild->name);
         else sprintf(query, "INSERT INTO `inputs` (`name`) VALUES ('%s')", newchild->name);
         if (sqlite3_exec(settings.sqlitehandle, query, NULL, NULL, &err) != SQLITE_OK) {
-          fprintf(stderr, "Sqlite error: %s\n", err);
+          error_log("Sqlite error: %s\n", err);
           sqlite3_free(err);
         }
         else {
@@ -649,7 +700,7 @@ int parse_line(input_t *input, char *line) {
 
   if (input->pcre) {
     if ((r = pcre_exec(input->pcre, NULL, line, strlen(line), 0, 0, matches, 30)) < 0) {
-      if (r < -1) fprintf(stderr, "pcre_exec returned error %d\n", r);
+      if (r < -1) error_log("pcre_exec returned error %d\n", r);
       return 0; // No match
     }
   }
@@ -662,18 +713,18 @@ int parse_line(input_t *input, char *line) {
   if (input->subtype & (TYPE_VALPOS|TYPE_LINEVALPOS)) {
     if (input->pcre) {
       if (!matches[input->valuex*2+1]) {
-        fprintf(stderr, "Not enough matches in regex \"%s\" for input %s to read value %d\n", input->regex, input->name, input->valuex);
+        error_log("Not enough matches in regex \"%s\" for input %s to read value %d\n", input->regex, input->name, input->valuex);
         return 0;
       }
       if (pcre_get_substring(line, matches, r?r:10, input->valuex, (const char **)&tok) <= 0) {
-        fprintf(stderr, "Failed to read substring %d from regex \"%s\" for input %s\n", input->valuex, input->regex, input->name);
+        error_log("Failed to read substring %d from regex \"%s\" for input %s\n", input->valuex, input->regex, input->name);
         return 0;
       }
     }
     else {
       tok = gettok(line, input->valuex, ' ');
       if (!tok) {
-        fprintf(stderr, "Not enough words on line %d in input %s\n", input->count, input->name);
+        error_log("Not enough words on line %d in input %s\n", input->count, input->name);
         return 0;
       }
     }
@@ -684,21 +735,21 @@ int parse_line(input_t *input, char *line) {
 
     if (input->pcre) {
       if (!matches[input->namex*2+1]) {
-        fprintf(stderr, "Not enough matches in regex \"%s\" for input %s to read value %d\n", input->regex, input->name, input->namex);
+        error_log("Not enough matches in regex \"%s\" for input %s to read value %d\n", input->regex, input->name, input->namex);
         return 0;
       }
       if (pcre_get_substring(line, matches, r?r:10, input->namex, (const char **)&name) <= 0) {
-        fprintf(stderr, "Failed to read substring %d from regex \"%s\" for input %s\n", input->valuex, input->regex, input->name);
+        error_log("Failed to read substring %d from regex \"%s\" for input %s\n", input->valuex, input->regex, input->name);
         return 0;
       }
 
       if (input->subtype & TYPE_NAMEVALPOS) {
         if (!matches[input->valuex*2+1]) {
-          fprintf(stderr, "Not enough matches in regex \"%s\" for input %s to read value %d\n", input->regex, input->name, input->valuex);
+          error_log("Not enough matches in regex \"%s\" for input %s to read value %d\n", input->regex, input->name, input->valuex);
           return 0;
         }
         if (pcre_get_substring(line, matches, r?r:10, input->valuex, (const char **)&tok) <= 0) {
-          fprintf(stderr, "Failed to read substring %d from regex \"%s\" for input %s\n", input->valuex, input->regex, input->name);
+          error_log("Failed to read substring %d from regex \"%s\" for input %s\n", input->valuex, input->regex, input->name);
           return 0;
         }
       }
@@ -706,13 +757,13 @@ int parse_line(input_t *input, char *line) {
     }
     else {
       if (!(tok = gettok(line, input->namex, ' '))) {
-        fprintf(stderr, "Input %s: word %d not found on line: %s\n", input->name, input->namex, line);
+        error_log("Input %s: word %d not found on line: %s\n", input->name, input->namex, line);
         return 0;
       }
       set(&name, tok);
       if (input->subtype & TYPE_NAMEVALPOS) {
         if (!(tok = gettok(line, input->valuex, ' '))) {
-          fprintf(stderr, "Input %s: word %d not found on line: %s\n", input->name, input->valuex, line);
+          error_log("Input %s: word %d not found on line: %s\n", input->name, input->valuex, line);
           return 0;
         }
       }
@@ -768,7 +819,7 @@ void process(input_t *input, float fl) {
 
   if (input->delta) {
     tmpfl = fl;
-    if (fl < input->deltalast) fprintf(stderr, "Input %s mode DELTA value %f is smaller than previous value %f\n", input->name, fl, input->deltalast);
+    if (fl < input->deltalast) error_log("Input %s mode DELTA value %f is smaller than previous value %f\n", input->name, fl, input->deltalast);
     else fl = fl-input->deltalast;
     input->deltalast = tmpfl;
     if (!input->update) {  // Just skip the first round for mode DELTA inputs -- may want to do some NaN magic here later
@@ -901,25 +952,25 @@ void prune_db() {
 
   sqlite3_prepare_v2(settings.sqlitehandle, "DELETE FROM data WHERE ts < ?", -1, &stmt, NULL);
   if (!stmt) {
-    fprintf(stderr, "Failed to prepare query for data prune: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+    error_log("Failed to prepare query for data prune: %s\n", sqlite3_errmsg(settings.sqlitehandle));
     return;
   }
   if (sqlite3_bind_int(stmt, 1, time(NULL)-settings.sqliteprune) != SQLITE_OK) {
-    fprintf(stderr, "Failed to bind param 1 on data prune query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+    error_log("Failed to bind param 1 on data prune query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
     return;
   }
   while ((r = sqlite3_step(stmt)) == SQLITE_BUSY) {
-    fprintf(stderr, "Database is locked; delaying data prune\n");
+    error_log("Database is locked; delaying data prune\n");
     sleep(1);
   }
   if (r != SQLITE_DONE) {
-    fprintf(stderr, "Error during data prune on sqlite database: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+    error_log("Error during data prune on sqlite database: %s\n", sqlite3_errmsg(settings.sqlitehandle));
     return;
   }
   sqlite3_reset(stmt);
   printf("Pruned %d rows older than %s from sqlite db\n", sqlite3_changes(settings.sqlitehandle), itodur(settings.sqliteprune));
   if (sqlite3_exec(settings.sqlitehandle, "VACUUM", NULL, NULL, &err) != SQLITE_OK) {
-    fprintf(stderr, "Failed to VACUUM sqlite database after pruning: %s\n", err);
+    error_log("Failed to VACUUM sqlite database after pruning: %s\n", err);
     sqlite3_free(err);
   }
 }
@@ -935,29 +986,29 @@ void *write_db() {
 
   sqlite3_prepare_v2(settings.sqlitehandle, "INSERT INTO `data` (`input`, `ts`, `value`) VALUES (?001, ?002, ?003)", -1, &stmt, NULL);
   if (!stmt) {
-    fprintf(stderr, "Failed to prepare query for update insert: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+    error_log("Failed to prepare query for update insert: %s\n", sqlite3_errmsg(settings.sqlitehandle));
     return NULL;
   }
 
   while (read(settings.sqlitepipe[0], &upd, sizeof(struct update)) == sizeof(struct update)) {
     if (sqlite3_bind_int(stmt, 1, upd.id) != SQLITE_OK) {
-      fprintf(stderr, "Failed to bind param 1 on update insert query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+      error_log("Failed to bind param 1 on update insert query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       return NULL;
     }
     if (sqlite3_bind_int(stmt, 2, upd.ts) != SQLITE_OK) {
-      fprintf(stderr, "Failed to bind param 2 on update insert query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+      error_log("Failed to bind param 2 on update insert query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       return NULL;
     }
     if (sqlite3_bind_double(stmt, 3, upd.val) != SQLITE_OK) {
-      fprintf(stderr, "Failed to bind param 3 on update insert query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+      error_log("Failed to bind param 3 on update insert query: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       return NULL;
     }
     while ((r = sqlite3_step(stmt)) == SQLITE_BUSY) {
-      fprintf(stderr, "Database is locked; delaying update %d for %d\n", upd.ts, upd.id);
+      error_log("Database is locked; delaying update %d for %d\n", upd.ts, upd.id);
       sleep(1);
     }
     if (r != SQLITE_DONE) {
-      fprintf(stderr, "Error while writing update to Sqlite database: %s\n", sqlite3_errmsg(settings.sqlitehandle));
+      error_log("Error while writing update to Sqlite database: %s\n", sqlite3_errmsg(settings.sqlitehandle));
       return NULL;
     }
     sqlite3_reset(stmt);
@@ -979,13 +1030,13 @@ int uplink_connect() {
   sa.sin_port = htons((unsigned int)settings.uplinkport);
 
   if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-    fprintf(stderr, "Failed to create socket for uplink\n");
+    error_log("Failed to create socket for uplink\n");
     return -1;
   }
   setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, 0, 0);
   if ((c = connect(sock, (struct sockaddr *) &sa, sizeof(sa))) < 0) {
     if (errno != EINPROGRESS) {
-      fprintf(stderr, "Failed to connect to uplink host %s ([%d] %s) %d\n", settings.uplinkhost, errno, strerror(errno));
+      error_log("Failed to connect to uplink host %s ([%d] %s) %d\n", settings.uplinkhost, errno, strerror(errno));
       close(sock);
       return -1;
     }
@@ -1061,7 +1112,7 @@ void start_tails(void) {
   for (input = inputs; input; input = input->next) {
     if (input->type & INPUT_TAIL) {
       if (!(input->tail->fp = fopen(input->tail->filename, "r"))) {
-        fprintf(stderr, "Input %s: failed to open input file %s: %m\n", input->name, input->tail->filename);
+        error_log("Input %s: failed to open input file %s: %m\n", input->name, input->tail->filename);
         exit(-1);
       }
       fseek(input->tail->fp, 0, SEEK_END);
@@ -1130,23 +1181,23 @@ void send_alert(int type, char *msg) {
   char *argv[3];
 
   if ((type == ALERT_WARN) && !settings.warncmd) {
-    fprintf(stderr, "Alert of level WARN but no warn-cmd configured\n");
+    error_log("Alert of level WARN but no warn-cmd configured\n");
     return;
   }
   else if ((type == ALERT_CRIT) && !settings.critcmd) {
-    fprintf(stderr, "Alert of level CRIT but no crit-cmd configured\n");
+    error_log("Alert of level CRIT but no crit-cmd configured\n");
     return;
   }
 
   switch ((c = fork())) {
-    case -1: fprintf(stderr, "Failed to fork alert command\n"); break;
+    case -1: error_log("Failed to fork alert command\n"); break;
     case 0: /* CHILD */
       if (type == ALERT_WARN) argv[0] = settings.warncmd;
       else argv[0] = settings.critcmd;
       argv[1] = msg;
       argv[2] = NULL;
       execve(argv[0], argv, NULL);
-      fprintf(stderr, "Failed to execute alert command\n");
+      error_log("Failed to execute alert command\n");
       exit(EXIT_FAILURE);
     default: /* PARENT */
       printf("Launched alert command with PID %d\n", c);
@@ -1196,7 +1247,7 @@ void write_log(input_t *input, float fl) {
 
   if (settings.logsize && input->logfp) {
     if (fstat(fileno(input->logfp), &statbuf)) {
-      fprintf(stderr, "Failed to stat() logfile for %s: %s (skipping write)\n", input->name, strerror(errno));
+      error_log("Failed to stat() logfile for %s: %s (skipping write)\n", input->name, strerror(errno));
       return;
     }
     if (statbuf.st_size >= settings.logsize) {
@@ -1207,7 +1258,7 @@ void write_log(input_t *input, float fl) {
 
   if (!input->logfp) {
     if ((r = scandir(".", &namelist, NULL, versionsort)) == -1) {
-      fprintf(stderr, "Failed to read log directory %s\n", getcwd(mainbuf, MAIN_BUF_SIZE));
+      error_log("Failed to read log directory %s\n", getcwd(mainbuf, MAIN_BUF_SIZE));
       return;
     }
     if (input->parent) {
@@ -1233,7 +1284,7 @@ void write_log(input_t *input, float fl) {
     else {
       printf("Reusing logfile %s for input %s\n", filename, input->name);
       if (stat(filename, &statbuf)) {
-        fprintf(stderr, "Failed to stat() logfile %s for %s: %s (skipping write)\n", filename, input->name, strerror(errno));
+        error_log("Failed to stat() logfile %s for %s: %s (skipping write)\n", filename, input->name, strerror(errno));
         while (--r) free(namelist[r]);
         free(namelist);
         return;
@@ -1259,7 +1310,7 @@ void write_log(input_t *input, float fl) {
     }
 
     if (!(input->logfp = fopen(filename, "a"))) {
-      fprintf(stderr, "Failed to open logfile \"%s\": %s\n", filename, strerror(errno));
+      error_log("Failed to open logfile \"%s\": %s\n", filename, strerror(errno));
       return;
     }
     free(filename);
@@ -1297,6 +1348,18 @@ char *gettok(char *str, int n, char delim) {
   strncpy(tok, start, str-start);
   tok[str-start] = '\0';
   return tok;
+}
+
+void error_log(const char *fmt, ...) {
+  char buf[100];
+  va_list args;
+  va_start(args, fmt);
+  if (settings.syslog) {
+    vsnprintf(buf, 500, fmt, args);
+    syslog(LOG_NOTICE, buf);
+  }
+  else vfprintf(stderr, fmt, args);
+  va_end(args);
 }
 
 void do_exit(int sig) {
