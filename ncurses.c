@@ -35,7 +35,7 @@ int block_width() {
   return 28+(settings.nsummaries>3?(settings.nsummaries-3)*7:0);
 }
 int block_height() {
-  return settings.nsummaries?15:11;
+  return settings.nsummaries?14:10;
 }
 
 void create_block(input_t *input) {
@@ -66,7 +66,7 @@ void create_block(input_t *input) {
   }
 }
 void arrange_blocks(void) {
-  int x = 0, y = 0, id = 65;
+  int x = 0, y = 1, id = 65;
   input_t *input;
 
   clear();
@@ -104,6 +104,8 @@ void check_updates() {
       wrefresh(input->win);
     }
   }
+  move(0, 0);
+  refresh();
 }
 
 void update_block(input_t *input) {
@@ -162,6 +164,8 @@ void update_block(input_t *input) {
 
   update_plot(input);
   wrefresh(input->win);
+  move(0, 0);
+  refresh();
 }
 
 void update_summary(input_t *input, int offset, int cnt, float avg, float min, float max) {
