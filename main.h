@@ -115,6 +115,7 @@ typedef struct input_t {
   input_pipe *pipe;
   input_fifo *fifo;
   input_sock *sock;
+  time_t start;
   time_t update;
   unsigned int valcnt;
   float valhist[VALUE_HIST_SIZE];

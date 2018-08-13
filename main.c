@@ -95,7 +95,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  signal(SIGCHLD, SIG_IGN);
+  // signal(SIGCHLD, SIG_IGN); Must be unset to enable wait()ing for zombies
   signal(SIGPIPE, SIG_IGN);
   signal(SIGWINCH, SIG_IGN);
   signal(SIGINT, do_exit);
@@ -226,13 +226,14 @@ int main(int argc, char *argv[]) {
     now = time(NULL);
 
     while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
+      // error_log("waitpid() returned %d\n", pid);
       for (input = inputs; input; input = input->next) {
         if ((input->type & INPUT_CMD) && (input->cmd->pid == pid)) {
           input->cmd->pid = 0;
         }
         else if ((input->type & INPUT_PIPE) && (input->pipe->pid == pid)) {
+          error_log("Pipe input %s PID %d exited\n", input->name, pid);
           input->pipe->pid = 0;
-          start_pipe(input);
         }
       }
     }
@@ -260,7 +261,7 @@ int main(int argc, char *argv[]) {
         if ((c = now-input->interval-input->update) >= 0) start_cmd(input);
         else if (-c < maxsleep) maxsleep = -c;
       }
-      else if ((input->type & INPUT_PIPE) && ((input->subtype & (TYPE_COUNT|TYPE_NAMECOUNT)) || input->consol)) {
+      else if ((input->type & INPUT_PIPE) && ((input->subtype & (TYPE_COUNT|TYPE_NAMECOUNT)) || input->consol)) { // One-shot pipe cmd
         if ((c = now-input->interval-input->update) >= 0) {
           do_pipe(input);
           if (input->consol) {
@@ -272,6 +273,12 @@ int main(int argc, char *argv[]) {
           }
         }
         else if (-c < maxsleep) maxsleep = -c;
+      }
+      else if (input->type & INPUT_PIPE) { // Continuous pipe cmd
+        if (!input->pipe->pid) { // Cmd not running
+          if ((c = now-input->interval-input->start) >= 0) start_pipe(input);
+          else if (-c < maxsleep) maxsleep = -c;
+        }
       }
     }
 
@@ -418,41 +425,45 @@ int main(int argc, char *argv[]) {
             }
           }
         }
-        else if ((input->type & INPUT_PIPE) && input->pipe->fds[0] && FD_ISSET(input->pipe->fds[0], &readfds)) {
-          if (input->buffer) {
-            strcpy(mainbuf, input->buffer);
-            offset = strlen(mainbuf);
-            free(input->buffer);
-            input->buffer = NULL;
-          }
-          else *mainbuf = '\0';
-
-          while ((c = read(input->pipe->fds[0], mainbuf+offset, MAIN_BUF_SIZE-offset)) > 0) {
-            mainbuf[c+offset] = '\0';
-            start = mainbuf;
-
-            while (!done && (end = strchr(start, '\n'))) {
-              *end = '\0';
-              done = parse_line(input, start);
-              start = end+1;
+        else if (input->type & INPUT_PIPE) {
+          if (input->pipe->fds[0] && FD_ISSET(input->pipe->fds[0], &readfds)) {
+            if (input->buffer) {
+              strcpy(mainbuf, input->buffer);
+              offset = strlen(mainbuf);
+              free(input->buffer);
+              input->buffer = NULL;
             }
-            offset = strlen(start);
-          }
+            else *mainbuf = '\0';
 
-          if (c) {
-            if (errno == EAGAIN) { // Nothing left to read currently
-              if (offset) { // Something not newline-terminated was left in the buffer
-                input->buffer = (char *)malloc(strlen(start)+1);
-                strcpy(input->buffer, start);
+            while ((c = read(input->pipe->fds[0], mainbuf+offset, MAIN_BUF_SIZE-offset)) > 0) {
+              mainbuf[c+offset] = '\0';
+              start = mainbuf;
+
+              while (!done && (end = strchr(start, '\n'))) {
+                *end = '\0';
+                done = parse_line(input, start);
+                start = end+1;
+              }
+              offset = strlen(start);
+            }
+
+            if (c) {
+              if (errno == EAGAIN) { // Nothing left to read currently
+                if (offset) { // Something not newline-terminated was left in the buffer
+                  input->buffer = (char *)malloc(strlen(start)+1);
+                  strcpy(input->buffer, start);
+                }
+              }
+              else {
+                perror("read()");
+                exit(-6);
               }
             }
             else {
-              perror("read()");
-              exit(-6);
+              error_log("Input %s closed pipe unexpectedly\n", input->name);
+              close(input->pipe->fds[0]);
+              input->pipe->fds[0] = 0;
             }
-          }
-          else {
-            error_log("Input %s closed pipe unexpectedly\n", input->name);
           }
         }
       }
@@ -1147,6 +1158,8 @@ void start_pipes(void) {
 void start_pipe(input_t *input) {
   int c;
   char *argv[4];
+
+  input->start = time(NULL);
 
   if (input->pipe->fds[0]) {
     if (close(input->pipe->fds[0])) perror("close()");
