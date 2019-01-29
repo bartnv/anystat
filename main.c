@@ -1376,6 +1376,7 @@ void error_log(const char *fmt, ...) {
 }
 
 void do_exit(int sig) {
-  printf("Received signal %d, exiting...\n", sig);
+  error_log("Received signal %d, exiting...\n", sig);
+  kill(0, SIGTERM);
   exit(0);
 }
