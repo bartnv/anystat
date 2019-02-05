@@ -929,6 +929,8 @@ void *write_sock() {
   char buf[1401] = "";
 
   printf("Started socket writer thread\n");
+  signal(SIGINT, SIG_DFL);
+  signal(SIGTERM, SIG_DFL);
   last = time(NULL);
 
   while (1) {
@@ -993,6 +995,8 @@ void *write_db() {
   sqlite3_stmt *stmt;
 
   printf("Started sqlite writer thread\n");
+  signal(SIGINT, SIG_DFL);
+  signal(SIGTERM, SIG_DFL);
   lastprune = time(NULL);
 
   sqlite3_prepare_v2(settings.sqlitehandle, "INSERT INTO `data` (`input`, `ts`, `value`) VALUES (?001, ?002, ?003)", -1, &stmt, NULL);
