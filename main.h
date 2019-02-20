@@ -152,6 +152,7 @@ struct {
   char *configfile;
   int daemon;
   int syslog;
+  int verbose;
   char *logdir;
   int logsize;
   char *uplinkhost;

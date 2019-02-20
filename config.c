@@ -35,7 +35,7 @@ void read_config(char *config) {
         if (matches[3] > 0) {
           mainbuf[matches[3]] = '\0';
           newinput = add_input(mainbuf+matches[2], NULL);
-          printf("New input: %s\n", mainbuf+matches[2]);
+          if (settings.verbose) printf("New input: %s\n", mainbuf+matches[2]);
         }
         else fprintf(stderr, "Config regex name succeeded but no submatch returned\n");
       }
@@ -261,7 +261,7 @@ void process_setting(input_t *input, char *name, char *value) {
         return;
       }
       if ((settings.sqliteprune = n)) printf("Pruning sqlite data older than %s every %s\n", value, itodur(DB_PRUNE_INTERVAL));
-      else printf("Pruning of sqlite data is disabled\n");
+      else if (settings.verbose) printf("Pruning of sqlite data is disabled\n");
       return;
     }
     else if (!strcasecmp("summaries", name) && value) {
@@ -289,7 +289,7 @@ void process_setting(input_t *input, char *name, char *value) {
           continue;
         }
         settings.summaries[i++] = n;
-        printf("Added summary period %d: %s\n", i, itodur(n));
+        if (settings.verbose) printf("Added summary period %d: %s\n", i, itodur(n));
         if (i == SUMMARIES_MAX) break;
       }
       settings.nsummaries = i;
@@ -331,14 +331,14 @@ void process_setting(input_t *input, char *name, char *value) {
       return;
     }
 
-    if (!value) printf("General setting '%s' is not valid or needs a parameter\n", name);
-    else printf("General setting '%s' set to \"%s\" is not valid\n", name, value);
+    if (!value) fprintf(stderr, "General setting '%s' is not valid or needs a parameter\n", name);
+    else fprintf(stderr, "General setting '%s' set to \"%s\" is not valid\n", name, value);
     return;
   }
 
   if (!strcasecmp("cat", name) && value) {
     if (!input->type) {
-      printf("Requested CAT of %s\n", value);
+      if (settings.verbose) printf("Requested CAT of %s\n", value);
       input->type = INPUT_CAT;
       input->cat = (input_cat *)malloc(sizeof(input_cat));
       if (!input->cat) {
@@ -353,7 +353,7 @@ void process_setting(input_t *input, char *name, char *value) {
   }
   else if (!strcasecmp("tail", name) && value) {
     if (!input->type) {
-      printf("Requested TAIL of %s\n", value);
+      if (settings.verbose) printf("Requested TAIL of %s\n", value);
       input->type = INPUT_TAIL;
       input->tail = (input_tail *)malloc(sizeof(input_tail));
       if (!input->tail) {
@@ -368,7 +368,7 @@ void process_setting(input_t *input, char *name, char *value) {
   }
   else if (!strcasecmp("cmd", name) && value) {
     if (!input->type) {
-      printf("Requested CMD of %s\n", value);
+      if (settings.verbose) printf("Requested CMD of %s\n", value);
       input->type = INPUT_CMD;
       input->cmd = (input_cmd *)malloc(sizeof(input_cmd));
       if (!input->cmd) {
@@ -383,7 +383,7 @@ void process_setting(input_t *input, char *name, char *value) {
   }
   else if (!strcasecmp("pipe", name) && value) {
     if (!input->type) {
-      printf("Requested PIPE of %s\n", value);
+      if (settings.verbose) printf("Requested PIPE of %s\n", value);
       input->type = INPUT_PIPE;
       input->pipe = (input_pipe *)malloc(sizeof(input_pipe));
       if (!input->pipe) {
@@ -398,7 +398,7 @@ void process_setting(input_t *input, char *name, char *value) {
   }
   else if (!strcasecmp("listen", name) && value) {
     if (!input->type) {
-      printf("Requested LISTEN on %s\n", value);
+      if (settings.verbose) printf("Requested LISTEN on %s\n", value);
       input->type = INPUT_LISTEN;
       input->sock = (input_sock *)malloc(sizeof(input_sock));
       if (!input->sock) {
@@ -576,7 +576,7 @@ void process_setting(input_t *input, char *name, char *value) {
     c = strtol(value, &cp, 10);
     if (cp != value) {
       input->alert_after = c;
-      printf("Alerting after %d samples\n", c);
+      if (settings.verbose) printf("Alerting after %d samples\n", c);
     }
     else fprintf(stderr, "Invalid parameter in ALERT-AFTER setting: %s\n", value);
     return;

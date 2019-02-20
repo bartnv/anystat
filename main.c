@@ -75,7 +75,7 @@ int main(int argc, char *argv[]) {
 
   memset(&settings, 0, sizeof(settings));
 
-  while ((c = getopt(argc, argv, "sdc:")) != -1) {
+  while ((c = getopt(argc, argv, "sdcv:")) != -1) {
     switch (c) {
       case 'c':
         settings.configfile = optarg;
@@ -86,6 +86,8 @@ int main(int argc, char *argv[]) {
       case 's':
         settings.syslog = 1;
         break;
+      case 'v':
+        settings.verbose = 1;
       case '?':
         // getopt() will print an error message
         exit(EXIT_FAILURE);
@@ -136,7 +138,7 @@ int main(int argc, char *argv[]) {
         error_log("fork() failed: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
       default:
-        printf("Daemonized with PID %d\n", c);
+        if (settings.verbose) printf("Daemonized with PID %d\n", c);
         exit(EXIT_SUCCESS);
     }
   }
@@ -159,7 +161,7 @@ int main(int argc, char *argv[]) {
       error_log("Failed to open sqlite database '%s': %s\n", settings.sqlitefile, sqlite3_errmsg(settings.sqlitehandle));
       exit(EXIT_FAILURE);
     }
-    printf("Opened SQLite database %s\n", settings.sqlitefile);
+    if (settings.verbose) printf("Opened SQLite database %s\n", settings.sqlitefile);
     sqlite3_prepare_v2(settings.sqlitehandle, "SELECT `id`, `name`, `sub` FROM inputs", 39, &stmt, NULL);
     if (!stmt) {
       error_log("Failed to prepare query for inputs on SQLite db: %s\n", sqlite3_errmsg(settings.sqlitehandle));
@@ -192,7 +194,7 @@ int main(int argc, char *argv[]) {
         }
         else {
           input->sqlid = sqlite3_last_insert_rowid(settings.sqlitehandle);
-          printf("Added new input %s to SQLite db with id %d\n", input->name, input->sqlid);
+          if (settings.verbose) printf("Added new input %s to SQLite db with id %d\n", input->name, input->sqlid);
         }
       }
     }
@@ -309,7 +311,7 @@ int main(int argc, char *argv[]) {
 
     if (c == -1) {
       if (errno == EINTR) {
-        printf("select() interrupted\n");
+        if (settings.verbose) printf("select() interrupted\n");
         sleep(1);
         continue;
       }
@@ -324,7 +326,7 @@ int main(int argc, char *argv[]) {
                 if (stat(input->tail->filename, &statbuf) != -1) {
                   if (statbuf.st_size == 0) {
                     rewind(input->tail->fp);
-                    printf("Input file for %s has been truncated\n", input->name);
+                    if (settings.verbose) printf("Input file for %s has been truncated\n", input->name);
                   }
                   else if (statbuf.st_size > input->tail->size) {
                     do_tail(input);
@@ -333,12 +335,12 @@ int main(int argc, char *argv[]) {
                   else if (statbuf.st_size < input->tail->size) {
                     rewind(input->tail->fp);
                     do_tail(input);
-                    printf("Input file for %s has shrunk %d bytes\n", input->name, input->tail->size-statbuf.st_size);
+                    if (settings.verbose) printf("Input file for %s has shrunk %d bytes\n", input->name, input->tail->size-statbuf.st_size);
                   }
                   else if (statbuf.st_size == input->tail->size) {
                     rewind(input->tail->fp);
                     do_tail(input);
-                    printf("Input file for %s has been modified, but has not changed size\n", input->name);
+                    if (settings.verbose) printf("Input file for %s has been modified, but has not changed size\n", input->name);
                   }
                   input->tail->size = statbuf.st_size;
                 }
@@ -346,11 +348,11 @@ int main(int argc, char *argv[]) {
               }
               if (ievent.mask & IN_MOVE_SELF) {
                 input->tail->reopen = 1;
-                printf("Input file for %s has been moved\n", input->name);
+                if (settings.verbose) printf("Input file for %s has been moved\n", input->name);
               }
               if (ievent.mask & IN_DELETE_SELF) {
                 input->tail->reopen = 2;
-                printf("Input file for %s has been deleted\n", input->name);
+                if (settings.verbose) printf("Input file for %s has been deleted\n", input->name);
               }
               break;
             }
@@ -686,11 +688,11 @@ void do_namepos(input_t *input, char *name, char *value) {
         }
         else {
           newchild->sqlid = sqlite3_last_insert_rowid(settings.sqlitehandle);
-          printf("Added new input %s to SQLite db with id %d\n", newchild->name, newchild->sqlid);
+          if (settings.verbose) printf("Added new input %s to SQLite db with id %d\n", newchild->name, newchild->sqlid);
         }
       }
     }
-    printf("Input %s: created new child %s\n", input->name, child->next->name);
+    if (settings.verbose) printf("Input %s: created new child %s\n", input->name, child->next->name);
   }
   if (value) parse_value(child->next, value); // subtype is TYPE_NAMEVALPOS
   else child->next->count++;  // subtype is TYPE_NAMECOUNT
@@ -794,8 +796,8 @@ void parse_value(input_t *input, char *buf) {
   fl = strtod(buf, &comment);
 
   if (buf == comment) { // No conversion occurred
-    if (errno == ERANGE) printf("[%s] Input conversion result for out of range for storage data type: [%s]\n", input->name, buf);
-    else printf("[%s] No valid data found on input: [%s]\n", input->name, buf);
+    if (errno == ERANGE) error_log("[%s] Input conversion result for out of range for storage data type: [%s]\n", input->name, buf);
+    else error_log("[%s] No valid data found on input: [%s]\n", input->name, buf);
   }
   else if (input->consol) consolidate(input, fl);
   else process(input, fl);
@@ -928,7 +930,7 @@ void *write_sock() {
   int last, done, r, todo = 0;
   char buf[1401] = "";
 
-  printf("Started socket writer thread\n");
+  if (settings.verbose) printf("Started socket writer thread\n");
   signal(SIGINT, SIG_DFL);
   signal(SIGTERM, SIG_DFL);
   last = time(NULL);
@@ -981,7 +983,7 @@ void prune_db() {
     return;
   }
   sqlite3_reset(stmt);
-  printf("Pruned %d rows older than %s from sqlite db\n", sqlite3_changes(settings.sqlitehandle), itodur(settings.sqliteprune));
+  if (settings.verbose) printf("Pruned %d rows older than %s from sqlite db\n", sqlite3_changes(settings.sqlitehandle), itodur(settings.sqliteprune));
   if (sqlite3_exec(settings.sqlitehandle, "VACUUM", NULL, NULL, &err) != SQLITE_OK) {
     error_log("Failed to VACUUM sqlite database after pruning: %s\n", err);
     sqlite3_free(err);
@@ -994,7 +996,7 @@ void *write_db() {
   struct update upd;
   sqlite3_stmt *stmt;
 
-  printf("Started sqlite writer thread\n");
+  if (settings.verbose) printf("Started sqlite writer thread\n");
   signal(SIGINT, SIG_DFL);
   signal(SIGTERM, SIG_DFL);
   lastprune = time(NULL);
@@ -1071,50 +1073,56 @@ void report_consol(input_t *input) {
 }
 
 void display(input_t *input) {
+  if (settings.verbose) {
+    if (input->parent) {
+      if (input->valcnt > 2) {
+        if (input->rocsum/(input->valcnt-1) < 0.1/60) printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/h <%.3g/h> | Cycle: %.3gs <%.3gs>\n",
+          input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
+          input->roclast*3600, input->rocsum/(input->valcnt-1)*3600, input->updlast, input->updsum/(input->valcnt-1));
+        else if (input->rocsum/(input->valcnt-1) < 0.1) printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/m <%.3g/m> | Cycle: %.3gs <%.3gs>\n",
+          input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
+          input->roclast*60, input->rocsum/(input->valcnt-1)*60, input->updlast, input->updsum/(input->valcnt-1));
+        else printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/s <%.3g/s> | Cycle: %.3gs <%.3gs>\n",
+          input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
+          input->roclast, input->rocsum/(input->valcnt-1), input->updlast, input->updsum/(input->valcnt-1));
+      }
+      else if (input->valcnt > 1) {
+        if (input->roclast < 0.1/60) printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/h | Cycle: %.3gs\n",
+          input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*3600, input->updlast);
+        else if (input->roclast < 0.1) printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/m | Cycle: %.3gs\n",
+          input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*60, input->updlast);
+        else printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/s | Cycle: %.3gs\n",
+          input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast, input->updlast);
+      }
+      else printf("[%s/%s] %.3g\n", input->parent->name, input->name, *input->vallast);
+    }
+    else {
+        if (input->valcnt > 2) {
+        if (input->rocsum/(input->valcnt-1) < 0.1/60) printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/h <%.3g/h> | Cycle: %.3gs <%.3gs>\n",
+          input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
+          input->roclast*3600, input->rocsum/(input->valcnt-1)*3600, input->updlast, input->updsum/(input->valcnt-1));
+        else if (input->rocsum/(input->valcnt-1) < 0.1) printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/m <%.3g/m> | Cycle: %.3gs <%.3gs>\n",
+          input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
+          input->roclast*60, input->rocsum/(input->valcnt-1)*60, input->updlast, input->updsum/(input->valcnt-1));
+        else printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/s <%.3g/s> | Cycle: %.3gs <%.3gs>\n",
+          input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
+          input->roclast, input->rocsum/(input->valcnt-1), input->updlast, input->updsum/(input->valcnt-1));
+      }
+      else if (input->valcnt > 1) {
+        if (input->roclast < 0.1/60) printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/h | Cycle: %.3gs\n",
+          input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*3600, input->updlast);
+        else if (input->roclast < 0.1) printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/m | Cycle: %.3gs\n",
+          input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*60, input->updlast);
+        else printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/s | Cycle: %.3gs\n",
+          input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast, input->updlast);
+      }
+      else printf("[%s] %.3g\n", input->name, *input->vallast);
+    }
+  }
   if (input->parent) {
-    if (input->valcnt > 2) {
-      if (input->rocsum/(input->valcnt-1) < 0.1/60) printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/h <%.3g/h> | Cycle: %.3gs <%.3gs>\n",
-        input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
-        input->roclast*3600, input->rocsum/(input->valcnt-1)*3600, input->updlast, input->updsum/(input->valcnt-1));
-      else if (input->rocsum/(input->valcnt-1) < 0.1) printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/m <%.3g/m> | Cycle: %.3gs <%.3gs>\n",
-        input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
-        input->roclast*60, input->rocsum/(input->valcnt-1)*60, input->updlast, input->updsum/(input->valcnt-1));
-      else printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/s <%.3g/s> | Cycle: %.3gs <%.3gs>\n",
-        input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
-        input->roclast, input->rocsum/(input->valcnt-1), input->updlast, input->updsum/(input->valcnt-1));
-    }
-    else if (input->valcnt > 1) {
-      if (input->roclast < 0.1/60) printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/h | Cycle: %.3gs\n",
-        input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*3600, input->updlast);
-      else if (input->roclast < 0.1) printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/m | Cycle: %.3gs\n",
-        input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*60, input->updlast);
-      else printf("[%s/%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/s | Cycle: %.3gs\n",
-        input->parent->name, input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast, input->updlast);
-    }
-    else printf("[%s/%s] %.3g\n", input->parent->name, input->name, *input->vallast);
     if (input->warn_above && (*input->vallast > *input->warn_above)) printf("[%s/%s] Warning: value above threshold of %f\n", input->parent->name, input->name, *input->warn_above);
   }
   else {
-      if (input->valcnt > 2) {
-      if (input->rocsum/(input->valcnt-1) < 0.1/60) printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/h <%.3g/h> | Cycle: %.3gs <%.3gs>\n",
-        input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
-        input->roclast*3600, input->rocsum/(input->valcnt-1)*3600, input->updlast, input->updsum/(input->valcnt-1));
-      else if (input->rocsum/(input->valcnt-1) < 0.1) printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/m <%.3g/m> | Cycle: %.3gs <%.3gs>\n",
-        input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
-        input->roclast*60, input->rocsum/(input->valcnt-1)*60, input->updlast, input->updsum/(input->valcnt-1));
-      else printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g <%.3g> | RoC: %.3g/s <%.3g/s> | Cycle: %.3gs <%.3gs>\n",
-        input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->ampsum/(input->valcnt-1),
-        input->roclast, input->rocsum/(input->valcnt-1), input->updlast, input->updsum/(input->valcnt-1));
-    }
-    else if (input->valcnt > 1) {
-      if (input->roclast < 0.1/60) printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/h | Cycle: %.3gs\n",
-        input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*3600, input->updlast);
-      else if (input->roclast < 0.1) printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/m | Cycle: %.3gs\n",
-        input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast*60, input->updlast);
-      else printf("[%s] Value: %.3g <%.3g> | Amplitude: %.3g | RoC: %.3g/s | Cycle: %.3gs\n",
-        input->name, *input->vallast, input->valsum/input->valcnt, input->amplast, input->roclast, input->updlast);
-    }
-    else printf("[%s] %.3g\n", input->name, *input->vallast);
     if (input->warn_above && (*input->vallast > *input->warn_above)) printf("[%s] Warning: value above threshold of %f\n", input->name, *input->warn_above);
   }
 }
@@ -1187,7 +1195,7 @@ void start_pipe(input_t *input) {
     default: /* PARENT */
       if (close(input->pipe->fds[1])) perror("close()");
       input->pipe->pid = c;
-      printf("Pipe input %s launched succesfully with PID %d\n", input->name, input->pipe->pid);
+      if (settings.verbose) printf("Pipe input %s launched succesfully with PID %d\n", input->name, input->pipe->pid);
 //      input->pipe->fp = fdopen(input->pipe->fds[0], "r");
 //      setlinebuf(input->pipe->fp);
   }
@@ -1217,7 +1225,7 @@ void send_alert(int type, char *msg) {
       error_log("Failed to execute alert command\n");
       exit(EXIT_FAILURE);
     default: /* PARENT */
-      printf("Launched alert command with PID %d\n", c);
+      if (settings.verbose) printf("Launched alert command with PID %d\n", c);
   }
 }
 
@@ -1299,7 +1307,7 @@ void write_log(input_t *input, float fl) {
       filename = NULL;
     }
     else {
-      printf("Reusing logfile %s for input %s\n", filename, input->name);
+      if (settings.verbose) printf("Reusing logfile %s for input %s\n", filename, input->name);
       if (stat(filename, &statbuf)) {
         error_log("Failed to stat() logfile %s for %s: %s (skipping write)\n", filename, input->name, strerror(errno));
         while (--r) free(namelist[r]);
@@ -1323,7 +1331,7 @@ void write_log(input_t *input, float fl) {
         filename = (char *)malloc(strlen(input->name)+16);
         sprintf(filename, "%s.%d.log", input->name, now);
       }
-      printf("Creating logfile %s for input %s\n", filename, input->name);
+      if (settings.verbose) printf("Creating logfile %s for input %s\n", filename, input->name);
     }
 
     if (!(input->logfp = fopen(filename, "a"))) {
