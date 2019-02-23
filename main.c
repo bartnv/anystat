@@ -344,7 +344,7 @@ int main(int argc, char *argv[]) {
                   }
                   input->tail->size = statbuf.st_size;
                 }
-                else perror("stat() error after inotify IN_MODIFY event");
+                else error_log("Error from stat() after inotify IN_MODIFY event: %s\n", strerror(errno));
               }
               if (ievent.mask & IN_MOVE_SELF) {
                 input->tail->reopen = 1;
@@ -518,38 +518,38 @@ void do_tail(input_t *input) {
   if (!input->tail->reopen) {
     if ((r = stat(input->tail->filename, &statbuf)) != -1) {
       if (statbuf.st_ino != input->tail->inode) {
-        error_log("Input file has changed inode; reopening...\n");
+        if (settings.verbose) printf("Input file has changed inode; reopening...\n");
         input->tail->reopen = 1;
         input->tail->inode = statbuf.st_ino;
       }
       else if (statbuf.st_size == 0) {
         rewind(input->tail->fp);
-        error_log("Input file for %s has been truncated\n", input->name);
+        if (settings.verbose) printf("Input file for %s has been truncated\n", input->name);
       }
       else if (statbuf.st_size < input->tail->size) {
         rewind(input->tail->fp);
 //        fseek(input->tail->fp, 0, SEEK_END);
 //        input->tail->size = statbuf.st_size;
-        error_log("Input file for %s has shrunk %d bytes\n", input->name, input->tail->size-statbuf.st_size);
+        if (settings.verbose) printf("Input file for %s has shrunk %d bytes\n", input->name, input->tail->size-statbuf.st_size);
       }
       input->tail->size = statbuf.st_size;
     }
-    else perror("stat()");
+    else error_log("stat() error: %s\n", strerror(errno));
   }
 
   do_tail_fp(input, input->tail->fp, 1);
 
   if (input->tail->reopen) {
     if (!input->tail->fpnew) {
-      error_log("Trying to open new input file after move/delete\n");
+      if (settings.verbose) printf("Trying to open new input file after move/delete\n");
       if (!(input->tail->fpnew = fopen(input->tail->filename, "r"))) {
         input->tail->fpnew = 0;
-        perror("Failed to open new input file after move/delete");
+        error_log("Failed to open new input file after move/delete: %s\n", strerror(errno));
       }
       else if (fcntl(fileno(input->tail->fpnew), F_SETFL, O_NONBLOCK) == -1) {
         fclose(input->tail->fpnew);
         input->tail->fpnew = 0;
-        perror("fcntl failed to set O_NONBLOCK on new input file after move/delete");
+        error_log("Failed to set O_NONBLOCK on new input file after move/delete: %s\n", strerror(errno));
       }
       else if ((input->tail->watch = inotify_add_watch(inot, input->tail->filename, IN_DELETE_SELF|IN_MOVE_SELF)) < 0) {
         fclose(input->tail->fpnew);
@@ -561,7 +561,7 @@ void do_tail(input_t *input) {
     }
     else {
       if (!input->count) {
-        error_log("No lines were added to old input file in one cycle, closing...\n");
+        if (settings.verbose) printf("No lines were added to old input file in one cycle, closing...\n");
         inotify_rm_watch(fileno(input->tail->fp), inot);
         fclose(input->tail->fp);
         input->tail->fp = input->tail->fpnew;
@@ -873,7 +873,7 @@ void process(input_t *input, float fl) {
   if (settings.logdir) write_log(input, fl);
   if (settings.sqlitehandle && input->sqlid) {
     struct update upd = { input->sqlid, now, fl };
-    if (write(settings.sqlitepipe[1], &upd, sizeof(struct update)) != sizeof(struct update)) perror("Failed to write to Sqlite writer pipe: ");
+    if (write(settings.sqlitepipe[1], &upd, sizeof(struct update)) != sizeof(struct update)) error_log("Failed to write to Sqlite writer pipe: %s\n", strerror(errno));
   }
   if (settings.uplinkhost && settings.uplinkport) {
     int c;
@@ -888,7 +888,7 @@ void process(input_t *input, float fl) {
     }
     sprintf(buf+strlen(buf), "%s %f %d\n", input->name, fl, now);
     c = strlen(buf);
-    if (write(settings.uplinkpipe[1], buf, c) != c) perror("Failed to write to socket writer pipe: ");
+    if (write(settings.uplinkpipe[1], buf, c) != c) error_log("Failed to write to socket writer pipe: %s\n", strerror(errno));
   }
 
   display(input);
@@ -947,7 +947,7 @@ void *write_sock() {
         if (uplink_connect() == -1) sleep(60);
       }
       if ((r = write(settings.uplinksock, buf+done, todo-done)) <= 0) {
-        perror("Write error to uplink socket: ");
+        error_log("Write error to uplink socket: %s\n", strerror(errno));
         close(settings.uplinksock);
         settings.uplinksock = 0;
         sleep(1);
@@ -957,7 +957,7 @@ void *write_sock() {
     }
     todo = 0;
   }
-  perror("Failed to read from uplink pipe: ");
+  error_log("Failed to read from uplink pipe: %s\n", strerror(errno));
 }
 
 void prune_db() {
@@ -1034,7 +1034,7 @@ void *write_db() {
       lastprune = time(NULL);
     }
   }
-  perror("Sqlite writer failed to read from pipe: ");
+  error_log("Sqlite writer failed to read from pipe: %s\n", strerror(errno));
 }
 
 int uplink_connect() {
