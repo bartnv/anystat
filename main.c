@@ -75,7 +75,7 @@ int main(int argc, char *argv[]) {
 
   memset(&settings, 0, sizeof(settings));
 
-  while ((c = getopt(argc, argv, "sdcv:")) != -1) {
+  while ((c = getopt(argc, argv, "c:dsv")) != -1) {
     switch (c) {
       case 'c':
         settings.configfile = optarg;
