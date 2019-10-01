@@ -11,7 +11,12 @@ install: anystat monitor
 depends:
 	cat build-depends-on | xargs aptitude -y install
 
+version := $(shell head -1 main.h | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
+size := $(shell du -s debian | cut -d '	' -f 1)
 deb: anystat monitor
 	cp anystat debian/usr/bin
 	cp monitor debian/usr/bin/anystat-monitor
-	dpkg-deb -b debian anystat_2.0.0_amd64.deb
+	cp anystat.service debian/lib/systemd/system
+	sed 's/^Version:.*$$/Version: $(version)-1/' < debian/DEBIAN/control > debian/DEBIAN/control-new
+	sed 's/^Installed-Size:.*$$/Installed-Size: $(size)/' < debian/DEBIAN/control-new > debian/DEBIAN/control
+	dpkg-deb -b debian anystat_$(version)_amd64.deb

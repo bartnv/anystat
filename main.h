@@ -1,3 +1,4 @@
+#define VERSION "2.1.3"
 #define CONFIG_FILE "/etc/anystat.conf"
 #define VALUE_HIST_SIZE 100
 #define SUMMARIES_MAX 5		// Max number of summary-columns in monitoring mode
