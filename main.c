@@ -480,6 +480,7 @@ void do_cat(input_t *input) {
   char *name = NULL, *value = NULL;
   char *tok;
   FILE *fp;
+  input_t *sub;
 
   if (!(fp = fopen(input->cat->filename, "r"))) {
     error_log("Failed to open file %s for input %s\n", input->cat->filename, input->name);
@@ -500,9 +501,10 @@ void do_cat(input_t *input) {
   if (input->subtype & TYPE_COUNT) process(input, input->count);
   else if (input->subtype & TYPE_NAMECOUNT) {
     process(input, input->count);
-    for (input = input->next; input && input->parent; input = input->next) {
-      if (input->skip) input->count -= input->skip;
-      process(input, input->count);
+    for (sub = input->next; sub && sub->parent; sub = sub->next) {
+      if (sub->skip) sub->count -= sub->skip;
+      process(sub, sub->count);
+      sub->count = 0;
     }
   }
 
