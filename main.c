@@ -88,6 +88,7 @@ int main(int argc, char *argv[]) {
         break;
       case 'v':
         settings.verbose = 1;
+        break;
       case '?':
         // getopt() will print an error message
         exit(EXIT_FAILURE);
