@@ -488,7 +488,13 @@ void do_cat(input_t *input) {
   if (input->subtype & TYPE_NAMEVALPOS) input->update = now;  // type NAMEVALPOS doesn't set the parent update-time
 
   while (!done && fgets(mainbuf, MAIN_BUF_SIZE, fp)) done = parse_line(input, mainbuf);
-  if (input->skip) input->count -= input->skip;
+  if (input->skip) {
+    if (input->skip > input->count) {
+      error_log("Not enough lines in file %s (skip %d specified, only %d lines found)\n", input->cat->filename, input->skip, input->count);
+      return;
+    }
+    input->count -= input->skip;
+  }
 
   if (input->subtype & TYPE_COUNT) process(input, input->count);
   else if (input->subtype & TYPE_NAMECOUNT) {
@@ -501,9 +507,8 @@ void do_cat(input_t *input) {
 
   if (input->consol && !(input->consol & CONSOL_FIRST)) report_consol(input);
 
-  if (feof(fp)) {
-    if (input->line) error_log("Not enough lines in file %s (line %d requested, only %d found)\n", input->cat->filename, input->line, input->count);
-    if (input->skip > input->count) error_log("Not enough lines in file %s (skip %d specified, only %d lines found)\n", input->cat->filename, input->skip, input->count);
+  if (input->line && feof(fp)) {
+    error_log("Not enough lines in file %s (line %d requested, only %d found)\n", input->cat->filename, input->line, input->count);
   }
 
   fclose(fp);
