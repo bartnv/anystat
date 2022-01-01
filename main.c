@@ -388,10 +388,8 @@ int main(int argc, char *argv[]) {
           if ((c == 0) || done) { // Either the process closed the pipe or we are done with it
             close(input->cmd->fds[0]);
             input->cmd->fds[0] = 0;
-            input->update = now;
 
             if (offset) parse_line(input, start);
-
             if (input->subtype & TYPE_COUNT) process(input, input->count);
             else if (input->subtype & TYPE_NAMECOUNT) {
               input_t *sub;
@@ -413,6 +411,7 @@ int main(int argc, char *argv[]) {
                 report_consol(input);
               }
             }
+            input->update = now;
             input->count = 0;
           }
           else {
