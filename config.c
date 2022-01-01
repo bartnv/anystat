@@ -77,6 +77,7 @@ void read_config(char *config) {
         if (!newinput->line) newinput->subtype = TYPE_VALPOS;
         else newinput->subtype = TYPE_LINEVALPOS;
       }
+      else if (newinput->namex) newinput->subtype = TYPE_NAMECOUNT;
       else newinput->subtype = TYPE_COUNT;
       if (newinput->interval < MIN_INTERVAL) {
         if (newinput->interval) newinput->interval = MIN_INTERVAL;
